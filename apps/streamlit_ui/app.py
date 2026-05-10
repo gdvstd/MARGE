@@ -773,9 +773,8 @@ def stream_analysis(
                 elif event.get("kind") == "tool_output" and not event.get("success", True):
                     err = event.get("error", "(unknown)")
                     yield f"\n\n  ❌ **{event.get('name')} failed:** `{err}`\n\n"
-        final = state.get("response") or ""
-        if final:
-            yield final
+        # Final response is NOT yielded here — the UI appends it as a separate
+        # MARGE segment so the order is: MARGE tool calls → sub-agents → MARGE final.
 
     return _generator()
 
@@ -901,8 +900,11 @@ def _app_main() -> None:
                 segments[0]["content"] += str(chunk)
             _render_live()
 
-        # Final response already yielded by generator into segments[0].
-        # Only add error if the run failed.
+        # Append MARGE's final response as its own segment — AFTER all sub-agent
+        # bubbles — so the render order is: MARGE tool calls → sub-agents → MARGE final.
+        final_response = stream_state.get("response", "")
+        if final_response:
+            segments.append({"role": "MARGE", "content": final_response})
         if stream_state.get("error"):
             segments[-1]["content"] += f"\n\n❌ `{stream_state['error']}`"
 
