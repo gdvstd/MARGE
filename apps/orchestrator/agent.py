@@ -65,33 +65,40 @@ class OrchestratorBundle:
     local_tools: dict[str, object]
 
 
-def _build_ml_catalog() -> str:
-    """Discover registered ML models and return a formatted catalog string.
+def _build_ml_catalog() -> tuple[str, frozenset[str]]:
+    """Discover registered ML models and return a formatted catalog string and valid feature names.
 
     The catalog is injected into the system prompt so the Chat Agent knows
     which conditions it can request predictions for and what features each
     model needs. The ML Orchestrator owns the actual predict_* tools; the
     Chat Agent only sees this textual description.
+
+    Returns:
+        (catalog_text, valid_feature_names) — the catalog string for injection
+        into the system prompt, and a frozenset of all valid ML input feature
+        names across all registered models (used to gate request_more_info).
     """
     from services.ml_mcp_server.registry import discover_models
 
     models = discover_models()
     if not models:
-        return "No ML models are currently registered."
+        return "No ML models are currently registered.", frozenset()
 
     lines: list[str] = []
+    all_feature_names: set[str] = set()
     for model in models:
         # Feature names live on model.config for DynamicMLAgent subclasses;
         # fall back gracefully for any other MLModel implementation.
         feature_names: list[str] = getattr(
             getattr(model, "config", None), "feature_names", []
         ) or []
+        all_feature_names.update(feature_names)
         feature_list = ", ".join(feature_names) if feature_names else "see model documentation"
         lines.append(
             f"- **{model.name}** — {model.metadata.description}\n"
             f"  Features: {feature_list}"
         )
-    return "\n".join(lines)
+    return "\n".join(lines), frozenset(all_feature_names)
 
 
 def build_bundle(expert: Any = None, llm: Any = None, on_sub_response: Any = None) -> OrchestratorBundle:
@@ -109,9 +116,11 @@ def build_bundle(expert: Any = None, llm: Any = None, on_sub_response: Any = Non
     if expert is None:
         expert = StubMedicalExpert()
 
+    ml_catalog, valid_feature_names = _build_ml_catalog()
+
     local_tools: dict[str, Any] = {
         "consult_medical_expert": make_consult_expert(expert, enforcer, on_sub_response),
-        "request_more_info": make_request_more_info(enforcer),
+        "request_more_info": make_request_more_info(enforcer, valid_feature_names),
         "clinical_report": make_clinical_report(enforcer),
         "abstain": make_abstain(enforcer),
     }
@@ -124,7 +133,6 @@ def build_bundle(expert: Any = None, llm: Any = None, on_sub_response: Any = Non
             llm=llm, enforcer=enforcer, on_response=on_sub_response
         )
 
-    ml_catalog = _build_ml_catalog()
     raw_prompt = _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     system_prompt = raw_prompt.replace("{ML_CATALOG}", ml_catalog)
 

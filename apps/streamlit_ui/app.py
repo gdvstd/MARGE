@@ -195,43 +195,102 @@ def render_abstain_card(payload: dict) -> None:
     st.warning(f"**Cannot reliably advise**\n\n{reason}\n\n**Suggested next step:** {fallback}")
 
 
+_ML_FEATURE_LABELS: dict[str, str] = {
+    # Diabetes (Pima dataset)
+    "preg": "Pregnancies",
+    "plas": "Plasma Glucose (mg/dL)",
+    "pres": "Blood Pressure (mmHg)",
+    "skin": "Skin Thickness (mm)",
+    "insu": "Insulin (μU/mL)",
+    "mass": "BMI (kg/m²)",
+    "pedi": "Diabetes Pedigree Function",
+    "age": "Age (years)",
+    # Heart failure
+    "ejection_fraction": "Ejection Fraction (%)",
+    "creatinine_phosphokinase": "CPK Enzyme (mcg/L)",
+    "creatinine": "Serum Creatinine (mg/dL)",
+    "sodium": "Serum Sodium (mEq/L)",
+    "platelet_count": "Platelet Count (kiloplatelets/mL)",
+    "anaemia": "Anaemia (yes/no)",
+    "diabetes": "Diabetes (yes/no)",
+    "high_blood_pressure": "High Blood Pressure (yes/no)",
+    "smoking": "Smoking (yes/no)",
+    "gender": "Gender",
+    "time": "Follow-up Period (days)",
+    # Breast cancer (sklearn)
+    "mean radius": "Mean Radius",
+    "mean texture": "Mean Texture",
+    "mean perimeter": "Mean Perimeter",
+    "mean area": "Mean Area",
+    "mean smoothness": "Mean Smoothness",
+}
+
+
 def render_request_more_info_card(payload: dict) -> None:
     rationale = payload.get("rationale", "")
     needed = payload.get("needed") or []
-    st.info(f"**Need more info**\n\n{rationale}")
+    st.info(f"**Additional information needed**\n\n{rationale}")
     if needed:
         rows = "\n".join(
-            f"- **{n.get('name')}** ({n.get('field_type','text')}"
-            f"{', ' + n.get('unit') if n.get('unit') else ''}): {n.get('why','')}"
+            "- **{}** ({}{}): {}".format(
+                _ML_FEATURE_LABELS.get(n.get("name", ""), n.get("name", "")),
+                n.get("field_type", "text"),
+                ", " + n.get("unit") if n.get("unit") else "",
+                n.get("why", ""),
+            )
             for n in needed
         )
         st.markdown(rows)
 
 
 def _terminal_payload_from_events(events: list[dict]) -> tuple[str | None, dict | None]:
-    """Find the last terminal tool call in this turn's events; return (name, input).
+    """Find the last SUCCESSFUL terminal tool call in this turn's events; return (name, input).
 
     Only structured terminals (clinical_report / abstain / request_more_info)
     have UI cards. Casual chat lives in the streamed natural-language content
     and produces no terminal record.
+
+    A terminal is considered "rejected" when its tool_output contains an "error"
+    key (e.g., request_more_info validation rejected a non-ML feature name).
+    Rejected terminals are skipped so the UI does not render a stale card.
     """
     terminals = {"clinical_report", "abstain", "request_more_info"}
-    for e in reversed(events):
-        if (
+    for i, e in enumerate(reversed(events)):
+        if not (
             e.get("kind") == "tool_call"
             and e.get("name") in terminals
             and e.get("agent", "orchestrator") == "orchestrator"
         ):
-            # The structured payload may live on either tool_call or tool_output.
-            inp = e.get("input")
+            continue
+
+        # Position of this tool_call in the original (chronological) list.
+        call_idx = len(events) - 1 - i
+
+        # Find the NEXT tool_output for this tool name (its own output).
+        # Tool calls are sequential, so the first tool_output after this call
+        # with the same name is its corresponding output.
+        tool_output = next(
+            (f for f in events[call_idx + 1:]
+             if f.get("kind") == "tool_output" and f.get("name") == e["name"]),
+            None,
+        )
+
+        # Skip rejected terminals — the tool returned {"error": ...}.
+        if tool_output is not None:
+            out = tool_output.get("output")
+            if isinstance(out, dict) and "error" in out:
+                continue
+
+        # This is a successful terminal — use its input for rendering.
+        inp = e.get("input")
+        if inp:
+            return e["name"], inp
+        if tool_output:
+            inp = tool_output.get("input")
             if inp:
                 return e["name"], inp
-            # Fall back to the matching tool_output (which carries input)
-            for f in reversed(events):
-                if (f.get("kind") == "tool_output" and f.get("name") == e["name"]
-                        and f.get("input")):
-                    return e["name"], f["input"]
-            return e["name"], None
+        return e["name"], None
+
     return None, None
 
 
