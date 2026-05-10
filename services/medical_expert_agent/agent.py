@@ -84,13 +84,23 @@ class MedicalExpertAgent:
             response = await expert.consult("...", {...})
     """
 
-    def __init__(self, llm: "ChatModel", system_prompt: str | None = None) -> None:
+    def __init__(
+        self,
+        llm: "ChatModel",
+        system_prompt: str | None = None,
+        enable_web_search: bool = True,
+        web_search: Callable | None = None,
+        max_web_results: int = 3,
+    ) -> None:
         from beeai_framework.memory import UnconstrainedMemory
 
         self._llm = llm
         self._system_prompt = system_prompt or _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
         self._memory = UnconstrainedMemory()
         self._event_sink: Callable[[dict[str, Any]], None] | None = None
+        self._enable_web_search = enable_web_search
+        self._web_search = web_search
+        self._max_web_results = max_web_results
 
     @classmethod
     def from_env(cls) -> "MedicalExpertAgent":
@@ -278,3 +288,11 @@ class MedicalExpertAgent:
             reasoning=self._result_text(result),
             citations=citations,
         )
+
+
+def build_medical_expert_agent() -> "MedicalExpertAgent | StubMedicalExpert":
+    """Factory: build a MedicalExpertAgent from env, or StubMedicalExpert if unconfigured."""
+    try:
+        return MedicalExpertAgent.from_env()
+    except (ValueError, KeyError):
+        return StubMedicalExpert()

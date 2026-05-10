@@ -7,8 +7,7 @@ BeeAI Tools with the enforcer wired in. Casual chat is natural-language
 content with no tool call (see apps/orchestrator/system_prompt.md).
 """
 
-import asyncio
-
+import pytest
 from pydantic import BaseModel, Field
 
 from apps.orchestrator.agent import build_bundle
@@ -37,14 +36,15 @@ class TestToBeeaiTool:
         bt = to_beeai_tool(fn, name="sample", description="d", input_schema=_SampleInput)
         assert isinstance(bt, Tool)
 
-    def test_supports_async_callables(self):
+    @pytest.mark.asyncio
+    async def test_supports_async_callables(self):
         async def fn(x: int) -> dict:
             return {"x": x}
 
         bt = to_beeai_tool(
             fn, name="sample_async", description="d", input_schema=_SampleInput
         )
-        result = asyncio.get_event_loop().run_until_complete(bt.run({"x": 7}))
+        result = await bt.run({"x": 7})
 
         assert result.result == {"x": 7}
 

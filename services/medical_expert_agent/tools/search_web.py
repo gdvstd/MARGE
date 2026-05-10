@@ -92,3 +92,13 @@ async def search_medical_web(query: str, max_results: int = 3) -> dict[str, Any]
         documents.append(doc.model_dump(mode="json"))
 
     return {"query": query, "documents": documents, "warning": None}
+
+
+def search_web(query: str) -> list:
+    """Sync alias used by unit tests (calls search_medical_web via asyncio)."""
+    import asyncio
+    try:
+        result = asyncio.run(search_medical_web(query))
+        return result.get("documents", [])
+    except Exception:
+        return []
