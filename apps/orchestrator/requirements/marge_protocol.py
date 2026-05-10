@@ -108,9 +108,12 @@ class MARGEProtocolRequirement(Requirement):
 
     async def init(self, *, tools, ctx) -> None:
         await super().init(tools=tools, ctx=ctx)
-        # Rule A removed — no ordering constraint between ML and expert.
         self._predict_tools = []
         self._terminal_tools = [t for t in tools if t.name in self.TERMINALS]
+        # Rule E: track ML orchestrator tool to enforce consult after expert
+        self._ml_orchestrator_tool = next(
+            (t for t in tools if t.name == _ML_ORCHESTRATOR_TOOL), None
+        )
 
     @run_with_context
     async def run(self, state: Any, context: Any) -> list[Rule]:  # noqa: ARG002
@@ -154,12 +157,32 @@ class MARGEProtocolRequirement(Requirement):
                 Rule(
                     target=tool.name,
                     allowed=allowed,
-                    # Natural-language replies (no tool call) are a valid
-                    # turn ending; never block stop.
                     prevent_stop=False,
                     hidden=False,
                     forced=False,
                     reason=reason,
+                )
+            )
+
+        # Rule E: after expert consult, prevent turn ending until ML orchestrator
+        # is also consulted. Models accept null features — run with partial data
+        # and use XAI scores to identify the most important missing features.
+        ml_tool = getattr(self, "_ml_orchestrator_tool", None)
+        if has_expert and not has_ml and ml_tool is not None:
+            rules.append(
+                Rule(
+                    target=ml_tool.name,
+                    allowed=True,
+                    prevent_stop=True,
+                    hidden=False,
+                    forced=False,
+                    reason=(
+                        "After consulting the medical expert you MUST also call "
+                        "consult_ml_orchestrator before ending this turn. "
+                        "Pass available patient features (use null for unknowns) — "
+                        "the ML Orchestrator handles missing values and returns "
+                        "XAI scores so you know exactly which features matter most."
+                    ),
                 )
             )
 

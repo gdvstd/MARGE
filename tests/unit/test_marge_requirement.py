@@ -59,24 +59,21 @@ def _make_tool(name: str) -> _StubTool:
 
 
 def _build_req() -> MARGEProtocolRequirement:
-    """Construct + manually init the requirement with the standard MARGE tool set.
-
-    We bypass the async `init` (which expects a RunContext) and prep the
-    private attributes directly — the test scope is the rule logic, not
-    BeeAI's lifecycle plumbing.
-    """
+    """Construct + manually init the requirement with the standard MARGE tool set."""
     req = MARGEProtocolRequirement()
     tools = [
         _make_tool("get_patient_history"),
         _make_tool("consult_medical_expert"),
+        _make_tool("consult_ml_orchestrator"),
         _make_tool("predict_breast_cancer_malignancy"),
         _make_tool("predict_diabetes_risk"),
         _make_tool("clinical_report"),
         _make_tool("abstain"),
         _make_tool("request_more_info"),
     ]
-    req._predict_tools = [t for t in tools if t.name.startswith("predict_")]
+    req._predict_tools = []
     req._terminal_tools = [t for t in tools if t.name in MARGEProtocolRequirement.TERMINALS]
+    req._ml_orchestrator_tool = next((t for t in tools if t.name == "consult_ml_orchestrator"), None)
     return req
 
 
@@ -251,3 +248,32 @@ class TestOrderingFreedom:
         )
         rules = _rules_by_target(req, s)
         assert rules["clinical_report"].allowed
+
+
+# --------------------------- Rule E: prevent stop after expert until ML called ---------------------------
+
+class TestRuleE:
+    def test_prevent_stop_after_expert_without_ml(self):
+        req = _build_req()
+        rules = _rules_by_target(req, _state("consult_medical_expert"))
+        assert "consult_ml_orchestrator" in rules
+        assert rules["consult_ml_orchestrator"].prevent_stop is True
+
+    def test_no_prevent_stop_after_both_called(self):
+        req = _build_req()
+        rules = _rules_by_target(req, _state("consult_medical_expert", "consult_ml_orchestrator"))
+        # Rule E no longer active — ML was called
+        assert "consult_ml_orchestrator" not in rules or not rules.get("consult_ml_orchestrator", type("", (), {"prevent_stop": False})()).prevent_stop
+
+    def test_no_prevent_stop_before_expert(self):
+        req = _build_req()
+        rules = _rules_by_target(req, _state())
+        # Rule E only activates after expert is consulted
+        r = rules.get("consult_ml_orchestrator")
+        assert r is None or r.prevent_stop is False
+
+    def test_ml_before_expert_does_not_trigger_rule_e(self):
+        req = _build_req()
+        rules = _rules_by_target(req, _state("consult_ml_orchestrator"))
+        r = rules.get("consult_ml_orchestrator")
+        assert r is None or r.prevent_stop is False
