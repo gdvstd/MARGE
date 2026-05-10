@@ -29,7 +29,7 @@ If the expert rules out every ML catalog condition, or if models conflict irreso
 | LLM backbone | **IBM Granite 3.x via watsonx.ai** | Primary model for both orchestrator and expert; per-role routing with fallback support |
 | Cloud storage | **IBM Cloud S3** | ML datasets, knowledge docs, and Lancet papers stored in object storage |
 | Vectorized retrieval | **IBM Cloud** — Vector DB | Knowledge docs chunked, embedded, and indexed for semantic RAG search by the Medical Expert Agent |
-| ML Agent & models | **IBM Cloud** | ML Agent and trained XGBoost ensemble models deployed on IBM Cloud; accessed by the local MCP server |
+| ML Agent & models | **IBM Cloud** | ML Agent trains XGBoost ensemble models on each dataset, packages them with XAI explainers (SHAP), and fetches the artifacts to local for the MCP server to serve |
 
 ### Why BeeAI over LangGraph
 
