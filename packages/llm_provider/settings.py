@@ -52,6 +52,8 @@ _DEFAULT_FEATHERLESS_FLASH_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
 # Same base URL as featherless; separate entry so sub-agents can use a
 # different (faster) model without touching the chat agent's config.
 
+_DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"  # fast + capable; switch to gpt-4.1-nano for max speed
+
 
 class Provider(str, Enum):
     ANTHROPIC = "anthropic"
@@ -61,6 +63,7 @@ class Provider(str, Enum):
     CHUTES = "chutes"
     FEATHERLESS = "featherless"
     FEATHERLESS_FLASH = "featherless_flash"
+    OPENAI = "openai"
 
 
 class Role(str, Enum):
@@ -160,6 +163,15 @@ def _featherless_flash() -> LLMSettings:
     )
 
 
+def _openai() -> LLMSettings:
+    return LLMSettings(
+        provider=Provider.OPENAI,
+        model_id=os.getenv("OPENAI_MODEL_ID", _DEFAULT_OPENAI_MODEL),
+        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url=os.getenv("OPENAI_BASE_URL"),  # None → uses api.openai.com
+    )
+
+
 _BUILDERS = {
     Provider.ANTHROPIC: _anthropic,
     Provider.WATSONX: _watsonx,
@@ -168,6 +180,7 @@ _BUILDERS = {
     Provider.CHUTES: _chutes,
     Provider.FEATHERLESS: _featherless,
     Provider.FEATHERLESS_FLASH: _featherless_flash,
+    Provider.OPENAI: _openai,
 }
 
 

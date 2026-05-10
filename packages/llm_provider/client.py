@@ -213,6 +213,10 @@ def _build_featherless(s: LLMSettings) -> "ChatModel":
     return _build_openai_compat(s, "FEATHERLESS_API_KEY")
 
 
+def _build_openai(s: LLMSettings) -> "ChatModel":
+    return _build_openai_compat(s, "OPENAI_API_KEY")
+
+
 def _build_featherless_flash(s: LLMSettings) -> "ChatModel":
     # Same endpoint as featherless; key falls back to FEATHERLESS_API_KEY
     key_var = "FEATHERLESS_FLASH_API_KEY"
@@ -230,6 +234,7 @@ _BUILDERS = {
     Provider.CHUTES: _build_chutes,
     Provider.FEATHERLESS: _build_featherless,
     Provider.FEATHERLESS_FLASH: _build_featherless_flash,
+    Provider.OPENAI: _build_openai,
 }
 
 
