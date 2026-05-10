@@ -213,6 +213,15 @@ def _build_featherless(s: LLMSettings) -> "ChatModel":
     return _build_openai_compat(s, "FEATHERLESS_API_KEY")
 
 
+def _build_featherless_flash(s: LLMSettings) -> "ChatModel":
+    # Same endpoint as featherless; key falls back to FEATHERLESS_API_KEY
+    key_var = "FEATHERLESS_FLASH_API_KEY"
+    if not s.api_key:
+        import os
+        s = s.__class__(**{**s.__dict__, "api_key": os.getenv("FEATHERLESS_API_KEY")})
+    return _build_openai_compat(s, key_var)
+
+
 _BUILDERS = {
     Provider.ANTHROPIC: _build_anthropic,
     Provider.WATSONX: _build_watsonx,
@@ -220,6 +229,7 @@ _BUILDERS = {
     Provider.NVIDIA: _build_nvidia,
     Provider.CHUTES: _build_chutes,
     Provider.FEATHERLESS: _build_featherless,
+    Provider.FEATHERLESS_FLASH: _build_featherless_flash,
 }
 
 

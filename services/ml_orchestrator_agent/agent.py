@@ -29,14 +29,19 @@ def _result_text(result: Any) -> str:
 
 
 @asynccontextmanager
-async def ml_orchestrator_agent(llm: "ChatModel") -> AsyncIterator[Any]:
+async def ml_orchestrator_agent(llm: "ChatModel | None" = None) -> AsyncIterator[Any]:
     """Yield a fully wired ML Orchestrator agent backed by the ML MCP server."""
     from beeai_framework.agents.requirement import RequirementAgent
     from beeai_framework.memory import UnconstrainedMemory
     from beeai_framework.tools.mcp import MCPTool
     from fastmcp import Client
 
+    from packages.llm_provider.client import build_chat_model_for_role
+    from packages.llm_provider.settings import Role
     from services.ml_mcp_server.server import build_server
+
+    if llm is None:
+        llm = build_chat_model_for_role(Role.ML_ORCHESTRATOR)
 
     ml_server = build_server()
     async with Client(ml_server) as client:

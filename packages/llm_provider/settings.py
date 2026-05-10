@@ -48,6 +48,10 @@ _DEFAULT_CHUTES_URL = "https://llm.chutes.ai/v1"
 _DEFAULT_FEATHERLESS_MODEL = "moonshotai/Kimi-K2.5"
 _DEFAULT_FEATHERLESS_URL = "https://api.featherless.ai/v1"
 
+_DEFAULT_FEATHERLESS_FLASH_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
+# Same base URL as featherless; separate entry so sub-agents can use a
+# different (faster) model without touching the chat agent's config.
+
 
 class Provider(str, Enum):
     ANTHROPIC = "anthropic"
@@ -56,11 +60,13 @@ class Provider(str, Enum):
     NVIDIA = "nvidia"
     CHUTES = "chutes"
     FEATHERLESS = "featherless"
+    FEATHERLESS_FLASH = "featherless_flash"
 
 
 class Role(str, Enum):
     ORCHESTRATOR = "orchestrator"
     MEDICAL_EXPERT = "medical_expert"
+    ML_ORCHESTRATOR = "ml_orchestrator"
 
 
 @dataclass(frozen=True)
@@ -145,6 +151,15 @@ def _featherless() -> LLMSettings:
     )
 
 
+def _featherless_flash() -> LLMSettings:
+    return LLMSettings(
+        provider=Provider.FEATHERLESS_FLASH,
+        model_id=os.getenv("FEATHERLESS_FLASH_MODEL_ID", _DEFAULT_FEATHERLESS_FLASH_MODEL),
+        api_key=os.getenv("FEATHERLESS_FLASH_API_KEY") or os.getenv("FEATHERLESS_API_KEY"),
+        base_url=os.getenv("FEATHERLESS_BASE_URL", _DEFAULT_FEATHERLESS_URL),
+    )
+
+
 _BUILDERS = {
     Provider.ANTHROPIC: _anthropic,
     Provider.WATSONX: _watsonx,
@@ -152,6 +167,7 @@ _BUILDERS = {
     Provider.NVIDIA: _nvidia,
     Provider.CHUTES: _chutes,
     Provider.FEATHERLESS: _featherless,
+    Provider.FEATHERLESS_FLASH: _featherless_flash,
 }
 
 
