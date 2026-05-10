@@ -64,7 +64,13 @@ def _limited(fn: Callable[..., Any], max_calls: int) -> Callable[..., Any]:
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             nonlocal count
             if count >= max_calls:
-                return {"documents": [], "warning": f"Web search limit ({max_calls}) reached for this turn."}
+                return {
+                    "documents": [],
+                    "warning": (
+                        f"Web search quota exhausted ({max_calls} search(es) already done). "
+                        "Do NOT call this tool again. Synthesize your answer from what you already have."
+                    ),
+                }
             count += 1
             return await fn(*args, **kwargs)
         return async_wrapper

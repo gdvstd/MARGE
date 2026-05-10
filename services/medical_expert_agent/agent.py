@@ -283,7 +283,7 @@ class MedicalExpertAgent:
             instructions=self._system_prompt,
             final_answer_as_tool=False,
         )
-        result = await agent.run(user_msg)
+        result = await agent.run(user_msg, max_iterations=6)
         return MedicalExpertResponse(
             reasoning=self._result_text(result),
             citations=citations,
