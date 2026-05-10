@@ -890,11 +890,8 @@ def _app_main() -> None:
                 segments[0]["content"] += str(chunk)
             _render_live()
 
-        # Append final MARGE response as its own segment
-        final_response = stream_state.get("response", "")
-        if final_response:
-            segments.append({"role": "MARGE", "content": final_response})
-
+        # Final response already yielded by generator into segments[0].
+        # Only add error if the run failed.
         if stream_state.get("error"):
             segments[-1]["content"] += f"\n\n❌ `{stream_state['error']}`"
 
