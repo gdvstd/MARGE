@@ -595,15 +595,11 @@ def stream_analysis(
 
         _log("turn_start", {"prompt": prompt[:120]})
 
-        # Hook 1: enforcer record (existing behaviour) — also queue tool name
-        _orig_record = bundle.enforcer.record
-        def _streaming_record(tool_name: str) -> None:
-            _orig_record(tool_name)
-            eq.put((
-                "tool_call",
-                {"agent": "orchestrator", "name": tool_name, "input": None},
-            ))
-        bundle.enforcer.record = _streaming_record
+        # Hook 1: enforcer record — just record trajectory, no queue push.
+        # The tool_call queue event (with actual input) is emitted by the
+        # per-tool emitter "start" handler below, which fires after BeeAI
+        # has already captured the input payload.
+        bundle.enforcer.record = bundle.enforcer.record  # identity (keep original)
 
         if hasattr(expert, "set_event_sink"):
             expert.set_event_sink(lambda event: eq.put(("expert_event", event)))
@@ -626,9 +622,24 @@ def stream_analysis(
                         def on_evt(data: Any, event: Any) -> None:
                             name = getattr(event, "name", "")
                             if name == "start":
-                                pending["input"] = getattr(data, "input", None)
+                                raw_input = getattr(data, "input", None)
+                                # Serialize input for display
+                                if hasattr(raw_input, "model_dump"):
+                                    try:
+                                        pending["input"] = raw_input.model_dump(mode="json")
+                                    except Exception:
+                                        pending["input"] = str(raw_input)
+                                else:
+                                    pending["input"] = raw_input
                                 _log("tool_start", {"name": tool_name,
                                                      "input": pending["input"]})
+                                # Queue tool_call HERE — BeeAI has already
+                                # captured the input before calling on_evt("start")
+                                eq.put((
+                                    "tool_call",
+                                    {"agent": "orchestrator", "name": tool_name,
+                                     "input": pending["input"]},
+                                ))
                             elif name == "success":
                                 output = getattr(data, "output", None)
                                 output_repr: Any = None
