@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import streamlit as st
-from beeai_framework.backend.message import UserMessage
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,8 +25,8 @@ load_dotenv(ROOT / ".env")
 
 from apps.orchestrator.agent import build_bundle, orchestrator_agent
 from packages.llm_provider.client import build_chat_model_for_role
-from packages.llm_provider.settings import Role, RoleConfig
-from services.patient_data_mcp_server.sources.csv_ingest import ingest_csv, init_empty_db
+from packages.llm_provider.settings import Role
+from services.patient_data_mcp_server.sources.csv_ingest import init_empty_db
 
 
 # ---------------------------------------------------------------------------
@@ -44,14 +44,6 @@ def _get_or_create_session_db() -> Path:
         st.session_state["patients"] = []
         st.session_state["current_patient"] = None
     return db_path
-
-
-def _reset_session() -> None:
-    for key in (
-        "session_id", "patients", "current_patient", "messages",
-        "csv_file_id", "orch_memory", "expert",
-    ):
-        st.session_state.pop(key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +119,61 @@ def _highlight_numbers(text: str) -> str:
     )
 
 
+def _html_text(text: Any) -> str:
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _inline_report_markup(text: str) -> str:
+    escaped = _html_text(text)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"\*(.+?)\*", r"<em>\1</em>", escaped)
+    return escaped.replace("\n", "<br>")
+
+
+def _recommendation_items(text: str) -> list[str]:
+    text = text.strip()
+    if not text:
+        return []
+
+    numbered = list(re.finditer(r"(?<!\d)(\d+)\.\s+", text))
+    if numbered:
+        items: list[str] = []
+        prefix = text[:numbered[0].start()].strip(" \n-:")
+        prefix = re.sub(
+            r"\s*(?:for|including)\s+(?:the\s+)?following\s+(?:tests|steps)\s*$",
+            "",
+            prefix,
+            flags=re.IGNORECASE,
+        ).strip(" \n-:")
+        if prefix:
+            items.append(prefix)
+        for idx, match in enumerate(numbered):
+            start = match.end()
+            end = numbered[idx + 1].start() if idx + 1 < len(numbered) else len(text)
+            item = text[start:end].strip(" \n-;")
+            if item:
+                items.append(item)
+        return items
+
+    items = re.split(r"(?:^|\n)\s*(?:[-*]|\d+\.)\s+", text)
+    items = [item.strip(" \n-") for item in items if item.strip(" \n-")]
+    return items or [text]
+
+
+def _remove_warning_sentences(text: str, *, warning_keyword: str) -> str:
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    kept = []
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if warning_keyword in lowered and any(
+            marker in lowered
+            for marker in ("unusual", "artifact", "lab error", "recheck", "repeat", "needs further")
+        ):
+            continue
+        kept.append(sentence)
+    return " ".join(kept).strip() or text
+
+
 def render_clinical_report_card(payload: dict) -> None:
     """Render a structured clinical_report payload (new schema).
 
@@ -140,7 +187,46 @@ def render_clinical_report_card(payload: dict) -> None:
     expert_quote = payload.get("expert_quote")
     safety = payload.get("safety_note", "")
 
-    tone_color = {"low": "#facc15", "medium": "#facc15", "high": "#34d399"}.get(confidence, "#a7b0be")
+    primary_evidence = evidence[0] if evidence else {}
+    model_name = str(primary_evidence.get("model", "ML model"))
+    predicted_class = str(primary_evidence.get("predicted_class", "risk"))
+    probability = primary_evidence.get("confidence")
+    try:
+        probability_pct = float(probability) * 100
+    except (TypeError, ValueError):
+        probability_pct = None
+
+    top_features = primary_evidence.get("top_features") or []
+    top_features = sorted(
+        top_features,
+        key=lambda f: abs(float(f.get("contribution", 0) or 0)),
+        reverse=True,
+    )
+    # Show only the strongest drivers. Always show at least one when available;
+    # include up to three when their contribution is still meaningful.
+    shown_features = top_features[:1]
+    if top_features:
+        strongest = abs(float(top_features[0].get("contribution", 0) or 0))
+        for feature in top_features[1:4]:
+            contribution = abs(float(feature.get("contribution", 0) or 0))
+            if strongest == 0 or contribution >= strongest * 0.35:
+                shown_features.append(feature)
+
+    combined_text = " ".join(str(v or "") for v in (summary, recommendation, expert_quote))
+    has_insulin_warning = (
+        "insulin" in combined_text.lower()
+        and any(term in combined_text.lower() for term in ("0", "unusual", "artifact", "lab error", "recheck"))
+    )
+    if has_insulin_warning:
+        summary = _remove_warning_sentences(summary, warning_keyword="insulin")
+
+    risk_label = "Diabetes risk" if "diabetes" in model_name.lower() else predicted_class.replace("_", " ")
+    tone_color = {"low": "#facc15", "medium": "#facc15", "high": "#fb7185"}.get(confidence, "#a7b0be")
+    probability_html = (
+        f"<div class='cr-risk-value'>{probability_pct:.1f}%</div>"
+        if probability_pct is not None else
+        "<div class='cr-risk-value'>Needs review</div>"
+    )
 
     st.markdown(f"""
         <style>
@@ -151,42 +237,86 @@ def render_clinical_report_card(payload: dict) -> None:
         .cr-conf {{ display:inline-block; padding:.1rem .55rem; border-radius:999px;
                     font-size:.75rem; font-weight:650; margin-left:.4rem;
                     background:rgba(148,163,184,.18); color:{tone_color}; }}
+        .cr-safety-top {{ border:1px solid rgba(251,191,36,.32); border-radius:8px;
+                          background:rgba(251,191,36,.08); color:#fde68a;
+                          padding:.65rem .75rem; margin:.5rem 0 .75rem;
+                          font-size:.86rem; }}
+        .cr-risk {{ border:1px solid rgba(251,113,133,.38); border-radius:8px;
+                    background:rgba(251,113,133,.08); padding:.75rem .85rem;
+                    margin:.55rem 0 .75rem; }}
+        .cr-risk-label {{ color:#cbd5e1; font-weight:650; font-size:.88rem; }}
+        .cr-risk-value {{ color:{tone_color}; font-size:2.15rem; line-height:1.05;
+                          font-weight:800; margin:.1rem 0; }}
+        .cr-risk-sub {{ color:#cbd5e1; font-size:.86rem; }}
         .cr-section {{ margin-top:.6rem; }}
         .cr-h {{ font-weight:650; color:#cbd5e1; font-size:.85rem; margin-bottom:.15rem; }}
+        .cr-summary {{ color:#e5e7eb; line-height:1.55; }}
         .cr-quote {{ border-left:3px solid #94a3b8; padding-left:.7rem; color:#cbd5e1;
                      font-style:italic; margin:.3rem 0; }}
-        .cr-evid {{ font-size:.86rem; padding:.45rem .6rem;
-                    border:1px solid rgba(148,163,184,.22); border-radius:6px;
-                    margin:.25rem 0; background:rgba(15,23,42,.32); }}
-        .cr-safety {{ font-size:.78rem; color:#a7b0be; margin-top:.7rem;
-                      padding-top:.5rem; border-top:1px dashed rgba(148,163,184,.25); }}
+        .cr-warning {{ border:1px solid rgba(251,191,36,.38); border-radius:8px;
+                       background:rgba(251,191,36,.08); color:#fde68a;
+                       padding:.7rem .8rem; margin:.75rem 0; line-height:1.45; }}
+        .cr-rec-list {{ display:grid; gap:.5rem; margin-top:.35rem; }}
+        .cr-rec {{ display:flex; gap:.6rem; align-items:flex-start;
+                   border:1px solid rgba(148,163,184,.22); border-radius:8px;
+                   background:rgba(15,23,42,.34); padding:.65rem .75rem; }}
+        .cr-rec-num {{ flex:0 0 auto; width:1.45rem; height:1.45rem; border-radius:999px;
+                       background:rgba(96,165,250,.18); color:#93c5fd;
+                       display:inline-flex; align-items:center; justify-content:center;
+                       font-size:.8rem; font-weight:800; }}
+        .cr-rec-text {{ color:#e5e7eb; line-height:1.45; }}
         </style>
     """, unsafe_allow_html=True)
 
     st.markdown(f"<div class='cr-card'>"
                 f"<div class='cr-title'>Clinical report"
-                f"<span class='cr-conf'>{confidence.upper()}</span></div>"
-                f"<div class='cr-section'><div class='cr-h'>Summary</div>{summary}</div>"
-                f"<div class='cr-section'><div class='cr-h'>Recommendation</div>{recommendation}</div>",
+                f"<span class='cr-conf'>{confidence.upper()}</span></div>",
                 unsafe_allow_html=True)
 
-    if evidence:
-        evid_html = "".join(
-            f"<div class='cr-evid'><b>{e.get('model','?')}</b> → "
-            f"{e.get('predicted_class','?')} (conf {e.get('confidence',0):.2f})</div>"
-            for e in evidence
+    if safety:
+        st.markdown(f"<div class='cr-safety-top'>⚠️ {safety}</div>", unsafe_allow_html=True)
+
+    st.markdown(
+        f"<div class='cr-risk'>"
+        f"<div class='cr-risk-label'>{risk_label}</div>"
+        f"{probability_html}"
+        f"<div class='cr-risk-sub'>{predicted_class.replace('_', ' ')}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    summary_html = _inline_report_markup(summary)
+    st.markdown(
+        f"<div class='cr-section'><div class='cr-h'>Summary</div>"
+        f"<div class='cr-summary'>{summary_html}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    if has_insulin_warning:
+        st.markdown(
+            "<div class='cr-warning'>⚠️ <strong>One value may need to be checked again.</strong><br>"
+            "The insulin result looks unusual for this pattern. If you want a clearer result, "
+            "please repeat or confirm the insulin-related blood test with a clinician.</div>",
+            unsafe_allow_html=True,
         )
-        st.markdown(f"<div class='cr-section'><div class='cr-h'>ML evidence</div>{evid_html}</div>",
-                    unsafe_allow_html=True)
+
+    rec_items = _recommendation_items(recommendation)
+    rec_html = "".join(
+        f"<div class='cr-rec'><span class='cr-rec-num'>{i}</span>"
+        f"<div class='cr-rec-text'>{_inline_report_markup(item)}</div></div>"
+        for i, item in enumerate(rec_items, start=1)
+    )
+    st.markdown(
+        f"<div class='cr-section'><div class='cr-h'>Next steps</div>"
+        f"<div class='cr-rec-list'>{rec_html}</div></div>",
+        unsafe_allow_html=True,
+    )
 
     if expert_quote:
         st.markdown(f"<div class='cr-section'><div class='cr-h'>Expert insight</div>"
                     f"<div class='cr-quote'>{expert_quote}</div></div>", unsafe_allow_html=True)
 
-    if safety:
-        st.markdown(f"<div class='cr-safety'>{safety}</div></div>", unsafe_allow_html=True)
-    else:
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_abstain_card(payload: dict) -> None:
@@ -449,9 +579,107 @@ def _strip_transport_sentinel(text: str) -> str:
     return text
 
 
-def _role_label(role: Role) -> str:
-    cfg = RoleConfig.from_env(role)
-    return f"{cfg.primary.provider.value}:{cfg.primary.model_id}"
+def _scroll_to_bottom_once(anchor_id: str) -> None:
+    """Scroll once without inserting a layout artifact into the chat body."""
+    st.markdown(
+        f'<div id="{anchor_id}" style="height:0; margin:0; padding:0; overflow:hidden;"></div>',
+        unsafe_allow_html=True,
+    )
+    # Streamlit components render as iframe wrappers, so keep this height-zero
+    # and only call it at explicit scroll points.
+    script = """
+    <script>
+    (() => {
+      const parent = window.parent;
+      const doc = parent.document;
+      const anchorId = __ANCHOR_ID__;
+
+      if (parent.__margeChatAutoscrollObserver) {
+        try {
+          parent.__margeChatAutoscrollObserver.disconnect();
+        } catch (_) {}
+        parent.__margeChatAutoscrollObserver = null;
+      }
+      if (parent.__margeChatAutoscrollInterval) {
+        try {
+          parent.clearInterval(parent.__margeChatAutoscrollInterval);
+        } catch (_) {}
+        parent.__margeChatAutoscrollInterval = null;
+      }
+
+      function scrollToBottom() {
+        const anchor = doc.getElementById(anchorId);
+        if (anchor) {
+          try {
+            anchor.scrollIntoView({ block: "end", inline: "nearest" });
+          } catch (_) {}
+        }
+
+        const knownContainers = [
+          doc.querySelector('[data-testid="stAppViewContainer"] section'),
+          doc.querySelector('[data-testid="stAppViewContainer"]'),
+          doc.querySelector('[data-testid="stVerticalBlock"]'),
+          doc.querySelector('section.main'),
+          doc.querySelector('.main'),
+          doc.scrollingElement,
+          doc.documentElement,
+          doc.body
+        ].filter(Boolean);
+
+        const scrollableContainers = Array.from(doc.querySelectorAll("*"))
+          .filter((el) => {
+            try {
+              return el.scrollHeight > el.clientHeight + 8;
+            } catch (_) {
+              return false;
+            }
+          });
+
+        const containers = [...new Set([...knownContainers, ...scrollableContainers])];
+
+        for (const el of containers) {
+          try {
+            el.scrollTop = el.scrollHeight;
+          } catch (_) {}
+        }
+
+        try {
+          parent.scrollTo(0, Math.max(
+            doc.body.scrollHeight,
+            doc.documentElement.scrollHeight
+          ));
+        } catch (_) {}
+      }
+
+      function scheduleScroll() {
+        parent.requestAnimationFrame(scrollToBottom);
+        setTimeout(scrollToBottom, 50);
+        setTimeout(scrollToBottom, 150);
+        setTimeout(scrollToBottom, 350);
+      }
+
+      scheduleScroll();
+    })();
+    </script>
+    """.replace("__ANCHOR_ID__", json.dumps(anchor_id))
+    components.html(script, height=0)
+
+
+def _exception_chain(exc: BaseException) -> list[str]:
+    chain = []
+    cur: BaseException | None = exc
+    for _ in range(6):
+        if cur is None:
+            break
+        chain.append(f"{type(cur).__name__}: {str(cur)[:200]}")
+        cur = cur.__cause__
+    return chain
+
+
+def _is_retryable_provider_error(exc: BaseException) -> bool:
+    """True for transient provider/adapter parse failures worth one retry."""
+    chain_text = " ⇠ ".join(_exception_chain(exc))
+    return "reasoning_content" in chain_text
 
 
 def _extract_token_text(token_event_data: Any) -> str:
@@ -655,20 +883,7 @@ def stream_analysis(
             prompt = user_message
             patient_db_path = None
 
-        llm = build_chat_model_for_role(Role.ORCHESTRATOR)
-        bundle = build_bundle(expert=expert)
-
         _log("turn_start", {"prompt": prompt[:120]})
-
-        # Hook 1: enforcer record (existing behaviour) — also queue tool name
-        _orig_record = bundle.enforcer.record
-        def _streaming_record(tool_name: str) -> None:
-            _orig_record(tool_name)
-            eq.put((
-                "tool_call",
-                {"agent": "orchestrator", "name": tool_name, "input": None},
-            ))
-        bundle.enforcer.record = _streaming_record
 
         if hasattr(expert, "set_event_sink"):
             expert.set_event_sink(lambda event: eq.put(("expert_event", event)))
@@ -679,7 +894,22 @@ def stream_analysis(
         # replies like "there!" instead of "Hi there!". Tool emitters still
         # stream progress; the user-facing answer comes from the completed run.
 
-        try:
+        async def _execute_attempt(attempt: int) -> tuple[Any, Any]:
+            llm = build_chat_model_for_role(Role.ORCHESTRATOR)
+            bundle = build_bundle(expert=expert)
+
+            # Hook 1: enforcer record (existing behaviour) — also queue tool name
+            _orig_record = bundle.enforcer.record
+
+            def _streaming_record(tool_name: str) -> None:
+                _orig_record(tool_name)
+                eq.put((
+                    "tool_call",
+                    {"agent": "orchestrator", "name": tool_name, "input": None},
+                ))
+
+            bundle.enforcer.record = _streaming_record
+
             async with orchestrator_agent(
                 bundle=bundle, llm=llm, patient_db_path=patient_db_path, memory=orch_memory,
             ) as agent:
@@ -745,21 +975,27 @@ def stream_analysis(
                 # Run non-streaming for the final assistant text; tool events
                 # are still emitted through tool emitters above.
                 result = await agent.run(prompt, stream=False)
+            return result, bundle
+
+        bundle = None
+        try:
+            try:
+                result, bundle = await _execute_attempt(attempt=1)
+            except Exception as exc:
+                if not _is_retryable_provider_error(exc):
+                    raise
+                _log("turn_retry", {"reason": "retryable_provider_error",
+                                    "error": " ⇠ ".join(_exception_chain(exc))})
+                result, bundle = await _execute_attempt(attempt=2)
             state["response"] = _result_text(result)
             state["trajectory"] = list(bundle.enforcer.trajectory)
         except Exception as exc:
             # Walk the __cause__ chain so the user sees the real underlying
             # error (e.g., LiteLLM RateLimitError, OpenAIError 5xx, ...)
-            chain = []
-            cur: BaseException | None = exc
-            for _ in range(6):
-                if cur is None:
-                    break
-                chain.append(f"{type(cur).__name__}: {str(cur)[:200]}")
-                cur = cur.__cause__
+            chain = _exception_chain(exc)
             state["error"] = " ⇠ ".join(chain) if chain else f"{type(exc).__name__}: {exc}"
             state["response"] = f"Run failed:\n```\n{state['error']}\n```"
-            state["trajectory"] = list(bundle.enforcer.trajectory)
+            state["trajectory"] = list(bundle.enforcer.trajectory) if bundle else []
         finally:
             if hasattr(expert, "set_event_sink"):
                 expert.set_event_sink(None)
@@ -822,10 +1058,7 @@ def stream_analysis(
             elif kind == "tool_output":
                 events.append({"kind": "tool_output", **_to_jsonable(payload)})
                 if payload.get("success"):
-                    out_str = json.dumps(payload.get("output"), ensure_ascii=False,
-                                         default=str)
-                    snippet = (out_str[:200] + "…") if len(out_str) > 200 else out_str
-                    yield f"  ✓ `{snippet}`\n\n"
+                    continue
                 else:
                     err = payload.get("error", "(unknown)")
                     yield f"\n\n  ❌ **{payload.get('name')} failed:** `{err}`\n\n"
@@ -839,9 +1072,7 @@ def stream_analysis(
                         "\n\n"
                     )
                 elif event.get("kind") == "tool_output" and event.get("success", True):
-                    out_str = json.dumps(event.get("output"), ensure_ascii=False, default=str)
-                    snippet = (out_str[:200] + "…") if len(out_str) > 200 else out_str
-                    yield f"  ✓ `{snippet}`\n\n"
+                    continue
                 elif event.get("kind") == "tool_output" and not event.get("success", True):
                     err = event.get("error", "(unknown)")
                     yield f"\n\n  ❌ **{event.get('name')} failed:** `{err}`\n\n"
@@ -862,63 +1093,12 @@ def _app_main() -> None:
 
     db_path = _get_or_create_session_db()
 
-    # --- Sidebar ---
-    with st.sidebar:
-        st.caption("LLM")
-        st.code(_role_label(Role.ORCHESTRATOR), language=None)
-
-        st.markdown("---")
-        st.markdown("**Patient Data**")
-
-        uploaded_csv = st.file_uploader("Upload patient CSV", type="csv")
-        if uploaded_csv is not None:
-            file_id = f"{uploaded_csv.name}_{uploaded_csv.size}"
-            if st.session_state.get("csv_file_id") != file_id:
-                with st.spinner("Importing patients…"):
-                    handles = ingest_csv(uploaded_csv.read(), db_path)
-                st.session_state["patients"] = handles
-                st.session_state["current_patient"] = handles[0]
-                st.session_state["csv_file_id"] = file_id
-                st.session_state.pop("messages", None)
-                st.success(f"Loaded {len(handles)} patient(s).")
-
-        patients: list[str] = st.session_state.get("patients", [])
-        if not patients:
-            st.caption("No patients loaded. Upload a CSV to start.")
-            st.session_state["current_patient"] = None
-        elif len(patients) == 1:
-            st.caption(f"Patient: `{patients[0]}`")
-            st.session_state["current_patient"] = patients[0]
-        else:
-            current = st.selectbox(
-                "Active patient",
-                patients,
-                index=patients.index(st.session_state.get("current_patient", patients[0])),
-            )
-            if current != st.session_state.get("current_patient"):
-                st.session_state["current_patient"] = current
-                st.session_state.pop("messages", None)
-
-        st.markdown("---")
-        if st.button("Clear conversation", use_container_width=True):
-            st.session_state.pop("messages", None)
-            st.rerun()
-        if st.button("Reset session", use_container_width=True):
-            _reset_session()
-            st.rerun()
-        if st.checkbox("Show session debug"):
-            with st.expander("Session state", expanded=True):
-                st.json(st.session_state.get("messages", []))
-
     # --- Chat ---
     current_patient = st.session_state.get("current_patient")
-    no_patients = not current_patient
 
     if "messages" not in st.session_state:
         welcome = (
-            "Upload a patient CSV from the sidebar to get started."
-            if no_patients else
-            "Tell me about the patient, or share any clinical values you have "
+            "Tell me about your symptoms or share any clinical values you have "
             "(age, blood sugar, BMI, blood pressure, etc.) and I'll run the analysis."
         )
         st.session_state.messages = [{"role": "assistant", "content": welcome, "trajectory": []}]
@@ -928,16 +1108,20 @@ def _app_main() -> None:
             traj = message.get("trajectory") or []
             for tool in traj:
                 st.markdown(f"🔧 `{tool}`")
-            st.markdown(message["content"])
-            if message.get("events"):
-                render_terminal_card(message["events"])
-                render_events_timeline(message["events"])
+            events = message.get("events") or []
+            has_terminal = _terminal_payload_from_events(events)[0] is not None
+            if not has_terminal:
+                st.markdown(message["content"])
+            if events:
+                render_terminal_card(events)
 
     user_input = st.chat_input("Message")
     if user_input:
+        turn_anchor_key = f"marge-scroll-{st.session_state.get('session_id', 'session')}-{len(st.session_state.messages)}"
         st.session_state.messages.append({"role": "user", "content": user_input, "trajectory": []})
         with st.chat_message("user"):
             st.markdown(user_input)
+        _scroll_to_bottom_once(f"{turn_anchor_key}-user")
 
         with st.chat_message("assistant"):
             stream_state: dict = {"response": "", "trajectory": [], "error": None, "events": []}
@@ -947,10 +1131,13 @@ def _app_main() -> None:
                 streamed_text += str(chunk)
                 stream_box.markdown(streamed_text)
             # After the stream completes, render any structured terminal card
+            has_terminal = _terminal_payload_from_events(stream_state.get("events", []))[0] is not None
+            if has_terminal:
+                stream_box.empty()
             render_terminal_card(stream_state.get("events", []))
             if stream_state.get("error"):
                 st.error(f"❌ {stream_state['error']}")
-            render_events_timeline(stream_state.get("events", []))
+        _scroll_to_bottom_once(f"{turn_anchor_key}-assistant")
 
         response = stream_state["response"]
         trajectory = stream_state["trajectory"]
