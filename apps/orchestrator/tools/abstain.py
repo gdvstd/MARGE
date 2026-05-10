@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, Field
+from apps.orchestrator.tools._schema import StrictToolInput
 
 from apps.orchestrator.middleware.enforce_protocol import ProtocolEnforcer
 
@@ -28,7 +29,7 @@ TOOL_DESCRIPTION = (
 )
 
 
-class ToolInput(BaseModel):
+class ToolInput(StrictToolInput):
     reason: str = Field(
         description=(
             "Concrete reason this turn cannot give a reliable recommendation "

@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from apps.orchestrator.tools._schema import StrictToolInput
 
 from apps.orchestrator.middleware.enforce_protocol import ProtocolEnforcer
 
@@ -25,7 +26,7 @@ TOOL_DESCRIPTION = (
 )
 
 
-class MLEvidence(BaseModel):
+class MLEvidence(StrictToolInput):
     model: str = Field(description="Tool name, e.g., 'predict_diabetes_risk'")
     predicted_class: str = Field(description="The class the model returned")
     confidence: float = Field(description="Model confidence, 0–1")
@@ -35,7 +36,7 @@ class MLEvidence(BaseModel):
     )
 
 
-class ToolInput(BaseModel):
+class ToolInput(StrictToolInput):
     summary: str = Field(
         description="One-paragraph plain-language summary of the case for the user."
     )

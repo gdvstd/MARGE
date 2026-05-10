@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
+from apps.orchestrator.tools._schema import StrictToolInput
 
 from apps.orchestrator.middleware.enforce_protocol import ProtocolEnforcer
 from packages.schemas.retrieval import MedicalExpertResponse
@@ -23,7 +24,7 @@ TOOL_DESCRIPTION = (
 )
 
 
-class ToolInput(BaseModel):
+class ToolInput(StrictToolInput):
     question: str = Field(description="The clinical question to ask the expert.")
     findings: dict[str, Any] = Field(
         default_factory=dict,

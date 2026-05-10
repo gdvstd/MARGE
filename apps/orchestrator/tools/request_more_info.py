@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from apps.orchestrator.tools._schema import StrictToolInput
 
 from apps.orchestrator.middleware.enforce_protocol import ProtocolEnforcer
 
@@ -39,7 +40,7 @@ class NeededField(BaseModel):
     )
 
 
-class ToolInput(BaseModel):
+class ToolInput(StrictToolInput):
     needed: list[NeededField] = Field(
         description="Specific items to ask the user for. Keep the list short (1–4 items).",
     )
