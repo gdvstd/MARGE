@@ -39,6 +39,7 @@ class _MedicalExpert(Protocol):
 def make_consult_expert(
     expert: _MedicalExpert,
     enforcer: ProtocolEnforcer,
+    on_response: Any = None,
 ) -> Callable[..., Any]:
     """Build the consult_medical_expert tool bound to a specific expert + enforcer.
 
@@ -54,6 +55,8 @@ def make_consult_expert(
         result = expert.consult(question=question, findings=findings)
         if inspect.iscoroutine(result):
             result = await result
+        if on_response is not None and hasattr(result, "reasoning"):
+            on_response("Medical Expert", result.reasoning)
         return result
 
     consult_medical_expert.__doc__ = TOOL_DESCRIPTION

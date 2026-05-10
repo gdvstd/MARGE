@@ -587,7 +587,11 @@ def stream_analysis(
             patient_db_path = None
 
         llm = build_chat_model_for_role(Role.ORCHESTRATOR)
-        bundle = build_bundle(expert=expert)
+
+        def _on_sub_response(agent_name: str, response: str) -> None:
+            eq.put(("sub_agent", {"agent": agent_name, "response": response}))
+
+        bundle = build_bundle(expert=expert, llm=llm, on_sub_response=_on_sub_response)
 
         _log("turn_start", {"prompt": prompt[:120]})
 
@@ -721,6 +725,11 @@ def stream_analysis(
             if kind == "token":
                 events.append({"kind": "reasoning_token", "text": payload})
                 continue
+            elif kind == "sub_agent":
+                # Sub-agent response — yielded as a special sentinel tuple
+                # so the UI can render it as a separate chat bubble.
+                yield ("sub_agent", payload["agent"], payload["response"])
+                continue
             elif kind == "tool_call":
                 events.append({"kind": "tool_call", **_to_jsonable(payload)})
                 yield (
@@ -831,15 +840,31 @@ def _app_main() -> None:
         )
         st.session_state.messages = [{"role": "assistant", "content": welcome, "trajectory": []}]
 
+    _AGENT_AVATARS = {"MARGE": "🏥", "ML Expert": "🤖", "Medical Expert": "🩺"}
+
+    def _render_segments(placeholder, segments: list[dict], events: list[dict]) -> None:
+        with placeholder.container():
+            for i, seg in enumerate(segments):
+                role = seg["role"]
+                avatar = _AGENT_AVATARS.get(role, "assistant")
+                with st.chat_message(role, avatar=avatar):
+                    st.markdown(seg["content"])
+                    # Terminal card and timeline only on the last MARGE segment
+                    if role == "MARGE" and i == len(segments) - 1 and events:
+                        render_terminal_card(events)
+                        render_events_timeline(events)
+
     for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            traj = message.get("trajectory") or []
-            for tool in traj:
-                st.markdown(f"🔧 `{tool}`")
-            st.markdown(message["content"])
-            if message.get("events"):
-                render_terminal_card(message["events"])
-                render_events_timeline(message["events"])
+        if message["role"] == "user":
+            with st.chat_message("user"):
+                st.markdown(message["content"])
+        elif "segments" in message:
+            turn_events = message.get("events") or []
+            _render_segments(st.empty(), message["segments"], turn_events)
+        else:
+            # Legacy format (welcome message, etc.)
+            with st.chat_message("assistant", avatar="🏥"):
+                st.markdown(message["content"])
 
     user_input = st.chat_input("Message")
     if user_input:
@@ -847,18 +872,33 @@ def _app_main() -> None:
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        with st.chat_message("assistant"):
-            stream_state: dict = {"response": "", "trajectory": [], "error": None, "events": []}
-            stream_box = st.empty()
-            streamed_text = ""
-            for chunk in stream_analysis(user_input, current_patient, db_path, stream_state):
-                streamed_text += str(chunk)
-                stream_box.markdown(streamed_text)
-            # After the stream completes, render any structured terminal card
-            render_terminal_card(stream_state.get("events", []))
-            if stream_state.get("error"):
-                st.error(f"❌ {stream_state['error']}")
-            render_events_timeline(stream_state.get("events", []))
+        # Multi-agent bubble rendering
+        stream_state: dict = {"response": "", "trajectory": [], "error": None, "events": []}
+        live_placeholder = st.empty()
+
+        # segments: [{role, avatar, content}, ...]
+        segments: list[dict] = [{"role": "MARGE", "content": ""}]
+
+        def _render_live() -> None:
+            _render_segments(live_placeholder, segments, stream_state.get("events", []))
+
+        for chunk in stream_analysis(user_input, current_patient, db_path, stream_state):
+            if isinstance(chunk, tuple) and len(chunk) == 3 and chunk[0] == "sub_agent":
+                _, agent_name, agent_response = chunk
+                segments.append({"role": agent_name, "content": agent_response})
+            else:
+                segments[0]["content"] += str(chunk)
+            _render_live()
+
+        # Append final MARGE response as its own segment
+        final_response = stream_state.get("response", "")
+        if final_response:
+            segments.append({"role": "MARGE", "content": final_response})
+
+        if stream_state.get("error"):
+            segments[-1]["content"] += f"\n\n❌ `{stream_state['error']}`"
+
+        _render_live()
 
         response = stream_state["response"]
         trajectory = stream_state["trajectory"]
@@ -875,10 +915,13 @@ def _app_main() -> None:
             events=turn_events,
         )
 
-        st.session_state.messages.append(
-            {"role": "assistant", "content": response, "trajectory": trajectory,
-             "events": turn_events}
-        )
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response,
+            "trajectory": trajectory,
+            "events": turn_events,
+            "segments": segments,
+        })
 
 
 # Guard: only execute UI when running inside the Streamlit runtime.

@@ -94,7 +94,7 @@ def _build_ml_catalog() -> str:
     return "\n".join(lines)
 
 
-def build_bundle(expert: Any = None, llm: Any = None) -> OrchestratorBundle:
+def build_bundle(expert: Any = None, llm: Any = None, on_sub_response: Any = None) -> OrchestratorBundle:
     """Build the Chat Agent's deterministic dependencies.
 
     Args:
@@ -110,7 +110,7 @@ def build_bundle(expert: Any = None, llm: Any = None) -> OrchestratorBundle:
         expert = StubMedicalExpert()
 
     local_tools: dict[str, Any] = {
-        "consult_medical_expert": make_consult_expert(expert, enforcer),
+        "consult_medical_expert": make_consult_expert(expert, enforcer, on_sub_response),
         "request_more_info": make_request_more_info(enforcer),
         "clinical_report": make_clinical_report(enforcer),
         "abstain": make_abstain(enforcer),
@@ -121,7 +121,7 @@ def build_bundle(expert: Any = None, llm: Any = None) -> OrchestratorBundle:
             make_consult_ml_orchestrator,
         )
         local_tools["consult_ml_orchestrator"] = make_consult_ml_orchestrator(
-            llm=llm, enforcer=enforcer
+            llm=llm, enforcer=enforcer, on_response=on_sub_response
         )
 
     ml_catalog = _build_ml_catalog()

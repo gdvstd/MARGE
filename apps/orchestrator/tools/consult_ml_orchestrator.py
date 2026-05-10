@@ -41,7 +41,11 @@ class ToolInput(BaseModel):
     )
 
 
-def make_consult_ml_orchestrator(llm: Any, enforcer: ProtocolEnforcer):
+def make_consult_ml_orchestrator(
+    llm: Any,
+    enforcer: ProtocolEnforcer,
+    on_response: Any = None,
+):
     async def consult_ml_orchestrator(
         request: str,
         patient_features: dict[str, Any] | None = None,
@@ -55,7 +59,10 @@ def make_consult_ml_orchestrator(llm: Any, enforcer: ProtocolEnforcer):
         async with ml_orchestrator_agent(llm=llm) as _agent:
             result = await _agent.run(prompt)
 
-        return _result_text(result)
+        response = _result_text(result)
+        if on_response is not None:
+            on_response("ML Expert", response)
+        return response
 
     consult_ml_orchestrator.__doc__ = TOOL_DESCRIPTION
     return consult_ml_orchestrator
