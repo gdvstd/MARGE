@@ -2,6 +2,8 @@
 
 > **IBM × UNSA Hackathon 2025** — Clinical AI assistant that orchestrates niche tabular ML models and a medical expert sub-agent to produce sourced, evidence-grounded clinical guidance.
 
+![Overall architecture of the MARGE (BeeAI IBM) system](docs/architecture.png)
+
 ---
 
 ## What It Does
@@ -25,7 +27,9 @@ If the expert rules out every ML catalog condition, or if models conflict irreso
 |---|---|---|
 | Agent orchestration | **BeeAI Framework** (IBM Research, open-source) | ReAct-style tool-use loop for the orchestrator and medical expert sub-agents; `RequirementAgent` middleware for protocol enforcement |
 | LLM backbone | **IBM Granite 3.x via watsonx.ai** | Primary model for both orchestrator and expert; per-role routing with fallback support |
-| Deployment target | **IBM Cloud Code Engine** | Containerised demo deployment (architecture-ready) |
+| Cloud storage | **IBM Cloud S3** | ML datasets, knowledge docs, and Lancet papers stored in object storage |
+| Vectorized retrieval | **IBM Cloud** — Vector DB | Knowledge docs chunked, embedded, and indexed for semantic RAG search by the Medical Expert Agent |
+| ML Agent & models | **IBM Cloud** | ML Agent and trained XGBoost ensemble models deployed on IBM Cloud; accessed by the local MCP server |
 
 ### Why BeeAI over LangGraph
 
