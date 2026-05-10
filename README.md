@@ -1,6 +1,6 @@
 # MARGE — Multi-agent ML-Reasoning Guidance Engine
 
-> **IBM × UNSA Hackathon 2025** — Clinical AI assistant that orchestrates niche tabular ML models and a medical expert sub-agent to produce sourced, evidence-grounded clinical guidance.
+> **IBM × UNSA Hackathon 2026** — Clinical AI assistant that orchestrates niche tabular ML models and a medical expert sub-agent to produce sourced, evidence-grounded clinical guidance.
 
 ![Overall architecture of the MARGE (BeeAI IBM) system](docs/architecture.png)
 
