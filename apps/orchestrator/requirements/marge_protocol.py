@@ -1,31 +1,23 @@
 """MARGE Protocol Requirement (custom BeeAI Requirement).
 
-Hybrid pattern (post-`agent_fix` refactor): casual chat is plain
-natural-language `content` from the LLM and ends the turn with **no tool
-call**. Only structured outputs that the UI must render as cards are
-expressed as terminal tools — the surface is now four:
+3-agent architecture rules (Chat Agent + ML Orchestrator + Expert):
 
-  A. predict_* tools are disallowed until consult_medical_expert was
-     called successfully at least once. The expert decides which conditions
-     to consider; the orchestrator translates that into specific ML calls.
-  B. clinical_report (terminal) needs at least one predict_* AND at least
-     one consult_medical_expert in the trajectory.
-  C. abstain (terminal) needs at least one consult_medical_expert. This
-     covers the "expert says nothing in our ML scope is suspected" path.
-  D. request_more_info (terminal) is always allowed — the orchestrator may
-     ask the user for additional data at any point.
+  A. consult_ml_orchestrator is gated on consult_medical_expert being
+     called first. The expert frames clinical context; the Chat Agent
+     then decides which ML conditions to evaluate.
+  B. clinical_report (terminal) needs consult_ml_orchestrator AND
+     consult_medical_expert in the trajectory.
+  C. abstain (terminal) needs consult_medical_expert at least once.
+  D. request_more_info (terminal) is always allowed.
 
-There is no `prevent_stop` rule any more. A natural-language reply with
-no tool call is a perfectly valid turn ending (a chatbot saying "hi
-back"). The prompt steers the model toward picking the right structured
-terminal when one is appropriate.
-
-Order between predict_* and consult_medical_expert beyond rule A is
-intentionally unconstrained — the orchestrator can re-consult the expert
-after running ML, run more ML after expert validation, etc.
+Natural-language chat (no tool call) remains a valid turn ending for
+casual conversation. The prompt steers the model toward using structured
+terminals for clinical analysis.
 
 Helper functions `has_any_ml_prediction` and `has_consulted_expert` are
 exposed for tests and for ad-hoc inspection of an agent state.
+`has_any_ml_prediction` matches `consult_ml_orchestrator` in addition to
+any legacy `predict_*` tools.
 """
 
 from typing import Any
@@ -38,6 +30,7 @@ from beeai_framework.agents.requirement.requirements.requirement import (
 
 
 _ML_PREDICTION_PREFIX = "predict_"
+_ML_ORCHESTRATOR_TOOL = "consult_ml_orchestrator"
 _EXPERT_TOOL_NAME = "consult_medical_expert"
 
 
@@ -50,9 +43,9 @@ def _successful_tool_names(state: Any) -> list[str]:
 
 
 def has_any_ml_prediction(state: Any) -> bool:
-    """True if any predict_* tool has succeeded in the trajectory."""
+    """True if consult_ml_orchestrator or any predict_* tool has succeeded."""
     return any(
-        name.startswith(_ML_PREDICTION_PREFIX)
+        name == _ML_ORCHESTRATOR_TOOL or name.startswith(_ML_PREDICTION_PREFIX)
         for name in _successful_tool_names(state)
     )
 
@@ -118,8 +111,10 @@ class MARGEProtocolRequirement(Requirement):
 
     async def init(self, *, tools, ctx) -> None:
         await super().init(tools=tools, ctx=ctx)
+        # Gate both legacy predict_* tools and the ML Orchestrator tool on expert-first
         self._predict_tools = [
-            t for t in tools if t.name.startswith(_ML_PREDICTION_PREFIX)
+            t for t in tools
+            if t.name.startswith(_ML_PREDICTION_PREFIX) or t.name == _ML_ORCHESTRATOR_TOOL
         ]
         self._terminal_tools = [t for t in tools if t.name in self.TERMINALS]
 
