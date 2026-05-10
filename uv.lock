@@ -2270,6 +2270,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "scikit-learn" },
     { name = "shap" },
+    { name = "tavily-python" },
     { name = "xgboost" },
 ]
 
@@ -2327,6 +2328,7 @@ requires-dist = [
     { name = "sentence-transformers", marker = "extra == 'medical-kb'", specifier = ">=2.7" },
     { name = "shap", specifier = ">=0.45" },
     { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.32" },
+    { name = "tavily-python", specifier = ">=0.7.24" },
     { name = "tavily-python", marker = "extra == 'medical-kb'", specifier = ">=0.3" },
     { name = "xgboost", specifier = ">=2.0" },
 ]
