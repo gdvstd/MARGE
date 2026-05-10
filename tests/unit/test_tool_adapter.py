@@ -50,14 +50,15 @@ class TestToBeeaiTool:
 
 
 class TestLocalToolsAsBeeai:
-    EXPECTED = {
+    EXPECTED_BASE = {
         "consult_medical_expert",
         "request_more_info",
         "clinical_report",
         "abstain",
     }
+    EXPECTED_FULL = EXPECTED_BASE | {"consult_ml_orchestrator"}
 
-    def test_returns_four_tools(self):
+    def test_returns_four_tools_without_llm(self):
         bundle = build_bundle()
         tools = local_tools_as_beeai(bundle)
         assert len(tools) == 4
@@ -66,4 +67,23 @@ class TestLocalToolsAsBeeai:
         bundle = build_bundle()
         tools = local_tools_as_beeai(bundle)
         names = {t.name for t in tools}
-        assert names == self.EXPECTED
+        assert names == self.EXPECTED_BASE
+
+    def test_returns_five_tools_with_llm(self):
+        """consult_ml_orchestrator added when bundle has llm wired in."""
+
+        class _FakeLLM:
+            model_id = "fake"
+
+        bundle = build_bundle(llm=_FakeLLM())
+        tools = local_tools_as_beeai(bundle)
+        assert len(tools) == 5
+
+    def test_tool_names_include_consult_ml_orchestrator_when_llm_provided(self):
+        class _FakeLLM:
+            model_id = "fake"
+
+        bundle = build_bundle(llm=_FakeLLM())
+        tools = local_tools_as_beeai(bundle)
+        names = {t.name for t in tools}
+        assert names == self.EXPECTED_FULL

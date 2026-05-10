@@ -13,6 +13,10 @@ BeeAI's `@tool` decorator inspects the wrapped function's signature: each
 parameter name must match a field in `input_schema`. Our factory closures
 already have the right signatures (e.g., `get_patient_history(handle)`),
 so we just wrap the return value as `JSONToolOutput`.
+
+3-agent note: `consult_ml_orchestrator` is added to the bundle only when
+`build_bundle(llm=...)` is called. This adapter detects its presence in
+`bundle.local_tools` and includes it in the BeeAI tool list automatically.
 """
 
 import functools
@@ -26,6 +30,7 @@ from apps.orchestrator.tools import (
     abstain as _ab,
     clinical_report as _cr,
     consult_expert as _ce,
+    consult_ml_orchestrator as _cmo,
     request_more_info as _rmi,
 )
 
@@ -39,7 +44,8 @@ if TYPE_CHECKING:
 # Patient tools (list_patients, get_patient, update_patient) come from the
 # patient-data MCP server and are not listed here.
 # Casual chat is plain natural-language content (no tool) — see system_prompt.md.
-LOCAL_TOOL_MODULES: tuple[ModuleType, ...] = (_ce, _rmi, _cr, _ab)
+# consult_ml_orchestrator is optional (only when llm is provided to build_bundle).
+_BASE_TOOL_MODULES: tuple[ModuleType, ...] = (_ce, _rmi, _cr, _ab)
 
 
 def _to_tool_output(result: Any) -> Any:
@@ -82,9 +88,14 @@ def to_beeai_tool(
 
 
 def local_tools_as_beeai(bundle: "OrchestratorBundle") -> list["Tool"]:
-    """Convert local tools in `bundle` into BeeAI Tools."""
-    tools: list[Tool] = []
-    for mod in LOCAL_TOOL_MODULES:
+    """Convert local tools in `bundle` into BeeAI Tools.
+
+    Always converts the 4 base tools (consult_medical_expert, request_more_info,
+    clinical_report, abstain). Also adds consult_ml_orchestrator when it is
+    present in `bundle.local_tools` (i.e., when build_bundle(llm=...) was used).
+    """
+    tools: list["Tool"] = []
+    for mod in _BASE_TOOL_MODULES:
         impl = bundle.local_tools[mod.TOOL_NAME]
         bt = to_beeai_tool(
             impl,
@@ -93,4 +104,16 @@ def local_tools_as_beeai(bundle: "OrchestratorBundle") -> list["Tool"]:
             input_schema=mod.ToolInput,
         )
         tools.append(bt)
+
+    # consult_ml_orchestrator is optional — only wired when llm is available
+    if _cmo.TOOL_NAME in bundle.local_tools:
+        impl = bundle.local_tools[_cmo.TOOL_NAME]
+        bt = to_beeai_tool(
+            impl,
+            name=_cmo.TOOL_NAME,
+            description=_cmo.TOOL_DESCRIPTION,
+            input_schema=_cmo.ToolInput,
+        )
+        tools.append(bt)
+
     return tools
