@@ -2,22 +2,19 @@
 
 3-agent architecture rules (Chat Agent + ML Orchestrator + Expert):
 
-  A. consult_ml_orchestrator is gated on consult_medical_expert being
-     called first. The expert frames clinical context; the Chat Agent
-     then decides which ML conditions to evaluate.
   B. clinical_report (terminal) needs consult_ml_orchestrator AND
-     consult_medical_expert in the trajectory.
+     consult_medical_expert in the trajectory. Order is free — the two
+     experts may be called interleaved multiple times.
   C. abstain (terminal) needs consult_medical_expert at least once.
   D. request_more_info (terminal) is always allowed.
 
-Natural-language chat (no tool call) remains a valid turn ending for
-casual conversation. The prompt steers the model toward using structured
-terminals for clinical analysis.
+No ordering constraint between consult_ml_orchestrator and
+consult_medical_expert — the chat agent decides dynamically which to
+call next based on what insight is needed.
 
-Helper functions `has_any_ml_prediction` and `has_consulted_expert` are
-exposed for tests and for ad-hoc inspection of an agent state.
-`has_any_ml_prediction` matches `consult_ml_orchestrator` in addition to
-any legacy `predict_*` tools.
+Natural-language chat (no tool call) remains a valid turn ending for
+casual conversation. The prompt steers the model toward structured
+terminals for clinical analysis.
 """
 
 from typing import Any
@@ -111,11 +108,8 @@ class MARGEProtocolRequirement(Requirement):
 
     async def init(self, *, tools, ctx) -> None:
         await super().init(tools=tools, ctx=ctx)
-        # Gate both legacy predict_* tools and the ML Orchestrator tool on expert-first
-        self._predict_tools = [
-            t for t in tools
-            if t.name.startswith(_ML_PREDICTION_PREFIX) or t.name == _ML_ORCHESTRATOR_TOOL
-        ]
+        # Rule A removed — no ordering constraint between ML and expert.
+        self._predict_tools = []
         self._terminal_tools = [t for t in tools if t.name in self.TERMINALS]
 
     @run_with_context
@@ -126,28 +120,9 @@ class MARGEProtocolRequirement(Requirement):
         """Pure-sync rule evaluation. Public for tests."""
         called = _successful_tool_names(state)
         has_expert = _EXPERT_TOOL_NAME in called
-        has_ml = any(n.startswith(_ML_PREDICTION_PREFIX) for n in called)
+        has_ml = has_any_ml_prediction(state)
 
         rules: list[Rule] = []
-
-        # Rule A: predict_* gated on expert
-        for tool in getattr(self, "_predict_tools", []):
-            rules.append(
-                Rule(
-                    target=tool.name,
-                    allowed=has_expert,
-                    prevent_stop=False,
-                    hidden=False,
-                    forced=False,
-                    reason=None
-                    if has_expert
-                    else (
-                        "Consult the medical expert first — they decide which "
-                        "clinical concerns warrant ML-based screening, then "
-                        "you map those to the available predict_* models."
-                    ),
-                )
-            )
 
         # Rules B / C / D (terminals — gating only, no prevent_stop)
         for tool in getattr(self, "_terminal_tools", []):

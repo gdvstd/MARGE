@@ -124,26 +124,19 @@ class TestHasConsultedExpert:
 # --------------------------- Rule A: predict_* gated on expert ---------------------------
 
 class TestPredictGatedOnExpert:
-    def test_predict_disallowed_when_expert_not_called(self):
+    """Rule A removed — no ordering constraint. ML and expert calls are free."""
+
+    def test_no_rule_emitted_for_predict_tools(self):
         req = _build_req()
         rules = _rules_by_target(req, _state("get_patient_history"))
+        # predict_* tools produce no Rule (Rule A removed)
         for name in ("predict_breast_cancer_malignancy", "predict_diabetes_risk"):
-            assert rules[name].allowed is False
-            assert rules[name].reason
+            assert name not in rules
 
-    def test_predict_allowed_after_expert(self):
+    def test_consult_ml_orchestrator_has_no_ordering_rule(self):
         req = _build_req()
-        rules = _rules_by_target(req, _state("consult_medical_expert"))
-        for name in ("predict_breast_cancer_malignancy", "predict_diabetes_risk"):
-            assert rules[name].allowed is True
-
-    def test_predict_allowed_after_expert_then_more_consults(self):
-        req = _build_req()
-        rules = _rules_by_target(
-            req, _state("consult_medical_expert", "consult_medical_expert")
-        )
-        for name in ("predict_breast_cancer_malignancy", "predict_diabetes_risk"):
-            assert rules[name].allowed is True
+        rules = _rules_by_target(req, _state())
+        assert "consult_ml_orchestrator" not in rules
 
 
 # --------------------------- Rule B: clinical_report needs ML + expert ---------------------------
@@ -217,8 +210,7 @@ class TestPreventStopAlwaysFalse:
     def test_at_start(self):
         req = _build_req()
         rules = _rules_by_target(req, _state())
-        for name in ("clinical_report", "abstain", "request_more_info",
-                     "predict_breast_cancer_malignancy", "predict_diabetes_risk"):
+        for name in ("clinical_report", "abstain", "request_more_info"):
             assert rules[name].prevent_stop is False
 
     def test_after_consult_only(self):
@@ -250,14 +242,12 @@ class TestOrderingFreedom:
         assert rules["clinical_report"].allowed
         assert rules["clinical_report"].prevent_stop is False
 
-    def test_multiple_predicts_one_expert(self):
+    def test_ml_and_expert_interleaved_allows_clinical_report(self):
         req = _build_req()
         s = _state(
+            "consult_ml_orchestrator",
             "consult_medical_expert",
-            "predict_diabetes_risk",
-            "predict_breast_cancer_malignancy",
+            "consult_ml_orchestrator",
         )
         rules = _rules_by_target(req, s)
-        assert rules["predict_diabetes_risk"].allowed
-        assert rules["predict_breast_cancer_malignancy"].allowed
         assert rules["clinical_report"].allowed
