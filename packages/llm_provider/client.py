@@ -222,6 +222,7 @@ def _build_openai(s: LLMSettings) -> "ChatModel":
         model_id=s.model_id,
         api_key=s.api_key,
         base_url=s.base_url or None,
+        use_strict_tool_schema=False,  # our tool schemas have dict/Optional fields incompatible with strict mode
     )
     return model
 
