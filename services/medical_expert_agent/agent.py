@@ -268,7 +268,7 @@ class MedicalExpertAgent:
 
         from services.medical_expert_agent.tools._adapter import expert_tools_as_beeai
 
-        tools = expert_tools_as_beeai()
+        tools = expert_tools_as_beeai(max_web_searches=1)
         self._wire_tool_logging(tools, citations, seen_citations)
 
         agent = RequirementAgent(
