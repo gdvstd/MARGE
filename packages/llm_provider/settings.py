@@ -52,7 +52,7 @@ _DEFAULT_FEATHERLESS_FLASH_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
 # Same base URL as featherless; separate entry so sub-agents can use a
 # different (faster) model without touching the chat agent's config.
 
-_DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"  # fast + capable; switch to gpt-4.1-nano for max speed
+_DEFAULT_OPENAI_MODEL = "gpt-5-mini"  # fast + capable; switch to gpt-4.1-nano for max speed
 
 
 class Provider(str, Enum):

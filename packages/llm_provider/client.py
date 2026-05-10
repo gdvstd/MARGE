@@ -214,7 +214,16 @@ def _build_featherless(s: LLMSettings) -> "ChatModel":
 
 
 def _build_openai(s: LLMSettings) -> "ChatModel":
-    return _build_openai_compat(s, "OPENAI_API_KEY")
+    if not s.api_key:
+        raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai.")
+    from beeai_framework.adapters.openai.backend.chat import OpenAIChatModel
+
+    model = OpenAIChatModel(
+        model_id=s.model_id,
+        api_key=s.api_key,
+        base_url=s.base_url or None,
+    )
+    return model
 
 
 def _build_featherless_flash(s: LLMSettings) -> "ChatModel":
