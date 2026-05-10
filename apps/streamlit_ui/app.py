@@ -900,14 +900,15 @@ def _app_main() -> None:
                 segments[0]["content"] += str(chunk)
             _render_live()
 
-        # Append MARGE's final response as its own segment — AFTER all sub-agent
-        # bubbles — so the render order is: MARGE tool calls → sub-agents → MARGE final.
+        # Restructure: drop the tool-call MARGE segment, keep sub-agents,
+        # then add ONE MARGE segment at the end with the final response.
+        # Result: [Expert?, ML Expert?] → [MARGE final] — single MARGE icon.
+        sub_segments = [s for s in segments if s["role"] != "MARGE"]
         final_response = stream_state.get("response", "")
-        if final_response:
-            segments.append({"role": "MARGE", "content": final_response})
+        marge_final: dict = {"role": "MARGE", "content": final_response or ""}
         if stream_state.get("error"):
-            segments[-1]["content"] += f"\n\n❌ `{stream_state['error']}`"
-
+            marge_final["content"] += f"\n\n❌ `{stream_state['error']}`"
+        segments = sub_segments + [marge_final]
         _render_live()
 
         response = stream_state["response"]
