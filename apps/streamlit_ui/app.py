@@ -127,11 +127,91 @@ def _highlight_numbers(text: str) -> str:
     )
 
 
-def render_clinical_report_card(payload: dict) -> None:
-    """Render a structured clinical_report payload (new schema).
+def _html_text(text: Any) -> str:
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    payload shape: {summary, recommendation, confidence, evidence: [...],
-                    expert_quote, safety_note}
+
+def _inline_report_markup(text: str) -> str:
+    """Render a subset of markdown inline (bold / italic / newline) as HTML."""
+    escaped = _html_text(text)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"\*(.+?)\*", r"<em>\1</em>", escaped)
+    return escaped.replace("\n", "<br>")
+
+
+def _recommendation_items(text: str) -> list[str]:
+    """Split a recommendation string into discrete numbered items.
+
+    The Chat Agent often writes recommendations like
+    "Schedule follow-up: 1. HbA1c repeat 2. Lipid panel 3. BP check" — render
+    each as its own item rather than one long sentence with embedded numbers.
+    """
+    text = text.strip()
+    if not text:
+        return []
+
+    numbered = list(re.finditer(r"(?<!\d)(\d+)\.\s+", text))
+    if numbered:
+        items: list[str] = []
+        prefix = text[:numbered[0].start()].strip(" \n-:")
+        prefix = re.sub(
+            r"\s*(?:for|including)\s+(?:the\s+)?following\s+(?:tests|steps)\s*$",
+            "",
+            prefix,
+            flags=re.IGNORECASE,
+        ).strip(" \n-:")
+        if prefix:
+            items.append(prefix)
+        for idx, match in enumerate(numbered):
+            start = match.end()
+            end = (
+                numbered[idx + 1].start() if idx + 1 < len(numbered) else len(text)
+            )
+            item = text[start:end].strip(" \n-;")
+            if item:
+                items.append(item)
+        return items
+
+    items = re.split(r"(?:^|\n)\s*(?:[-*]|\d+\.)\s+", text)
+    items = [item.strip(" \n-") for item in items if item.strip(" \n-")]
+    return items or [text]
+
+
+def _remove_warning_sentences(text: str, *, warning_keyword: str) -> str:
+    """Strip sentences from `text` that flag a measurement-quality concern.
+
+    These belong in `recommendation` (or a dedicated warning box), not in
+    the summary — keeping them out of the summary prevents the user from
+    confusing "lab value may be unreliable" with the actual ML finding.
+    """
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    kept = []
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if warning_keyword in lowered and any(
+            marker in lowered
+            for marker in ("unusual", "artifact", "lab error", "recheck", "repeat", "needs further")
+        ):
+            continue
+        kept.append(sentence)
+    return " ".join(kept).strip() or text
+
+
+def render_clinical_report_card(payload: dict) -> None:
+    """Render a structured clinical_report payload as a framed artifact.
+
+    The card is wrapped in a distinct lined box (left accent + double border
+    + 'MARGE Clinical Report' header pill) so it reads as a structured
+    artifact, never as a normal chat reply.
+
+    Layout (top → bottom):
+      1. Header pill — agent + confidence chip
+      2. Safety reminder banner (always at top, before the verdict)
+      3. Primary risk spotlight — large probability + class label
+      4. Summary prose (with measurement-quality warnings stripped)
+      5. Lab-quality warning box (if a flagged value was found)
+      6. Next steps — numbered cards
+      7. Expert insight quote (italic left-rule)
     """
     summary = payload.get("summary", "")
     recommendation = payload.get("recommendation", "")
@@ -140,53 +220,173 @@ def render_clinical_report_card(payload: dict) -> None:
     expert_quote = payload.get("expert_quote")
     safety = payload.get("safety_note", "")
 
-    tone_color = {"low": "#facc15", "medium": "#facc15", "high": "#34d399"}.get(confidence, "#a7b0be")
+    primary_evidence = evidence[0] if evidence else {}
+    model_name = str(primary_evidence.get("model", "ML model"))
+    predicted_class = str(primary_evidence.get("predicted_class", "risk"))
+    probability = primary_evidence.get("confidence")
+    try:
+        probability_pct = float(probability) * 100
+    except (TypeError, ValueError):
+        probability_pct = None
 
-    st.markdown(f"""
+    # Keep only the strongest SHAP drivers. Always show at least one; include
+    # up to three more when their contribution is at least 35% of the top.
+    top_features = primary_evidence.get("top_features") or []
+    top_features = sorted(
+        top_features,
+        key=lambda f: abs(float(f.get("contribution", 0) or 0)),
+        reverse=True,
+    )
+    shown_features = top_features[:1]
+    if top_features:
+        strongest = abs(float(top_features[0].get("contribution", 0) or 0))
+        for feature in top_features[1:4]:
+            contribution = abs(float(feature.get("contribution", 0) or 0))
+            if strongest == 0 or contribution >= strongest * 0.35:
+                shown_features.append(feature)
+
+    # Catch the common "insulin=0" lab-artifact case and surface it as a
+    # dedicated warning box instead of leaving it embedded in the summary.
+    combined_text = " ".join(
+        str(v or "") for v in (summary, recommendation, expert_quote)
+    )
+    has_insulin_warning = (
+        "insulin" in combined_text.lower()
+        and any(
+            term in combined_text.lower()
+            for term in ("0", "unusual", "artifact", "lab error", "recheck")
+        )
+    )
+    if has_insulin_warning:
+        summary = _remove_warning_sentences(summary, warning_keyword="insulin")
+
+    risk_label = (
+        "Diabetes risk"
+        if "diabetes" in model_name.lower()
+        else predicted_class.replace("_", " ")
+    )
+    tone_color = {
+        "low": "#facc15",
+        "medium": "#facc15",
+        "high": "#fb7185",
+    }.get(confidence, "#a7b0be")
+    probability_html = (
+        f"<div class='cr-risk-value'>{probability_pct:.1f}%</div>"
+        if probability_pct is not None
+        else "<div class='cr-risk-value'>Needs review</div>"
+    )
+
+    st.markdown(
+        f"""
         <style>
-        .cr-card {{ border:1px solid rgba(148,163,184,.32); border-radius:10px;
-                    padding:1rem 1.1rem; margin:.4rem 0 .6rem;
-                    background:rgba(15,23,42,.45); }}
-        .cr-title {{ font-weight:750; font-size:1.05rem; margin-bottom:.4rem; }}
+        .cr-card {{ border:1.5px solid rgba(96,165,250,.55); border-radius:12px;
+                    padding:1rem 1.15rem; margin:.55rem 0 .7rem;
+                    background:rgba(15,23,42,.55);
+                    box-shadow:0 0 0 1px rgba(96,165,250,.12),
+                               0 6px 20px -8px rgba(15,23,42,.6);
+                    border-left:4px solid #60a5fa; }}
+        .cr-pill {{ display:inline-flex; align-items:center; gap:.35rem;
+                    padding:.12rem .55rem; border-radius:999px;
+                    background:rgba(96,165,250,.18); color:#bfdbfe;
+                    font-size:.72rem; font-weight:700; letter-spacing:.04em;
+                    text-transform:uppercase; margin-bottom:.45rem; }}
+        .cr-title {{ font-weight:750; font-size:1.05rem; margin-bottom:.4rem;
+                     display:flex; align-items:center; gap:.4rem; }}
         .cr-conf {{ display:inline-block; padding:.1rem .55rem; border-radius:999px;
-                    font-size:.75rem; font-weight:650; margin-left:.4rem;
+                    font-size:.75rem; font-weight:650;
                     background:rgba(148,163,184,.18); color:{tone_color}; }}
+        .cr-safety-top {{ border:1px solid rgba(251,191,36,.32); border-radius:8px;
+                          background:rgba(251,191,36,.08); color:#fde68a;
+                          padding:.65rem .75rem; margin:.5rem 0 .75rem;
+                          font-size:.86rem; }}
+        .cr-risk {{ border:1px solid rgba(251,113,133,.38); border-radius:8px;
+                    background:rgba(251,113,133,.08); padding:.75rem .85rem;
+                    margin:.55rem 0 .75rem; }}
+        .cr-risk-label {{ color:#cbd5e1; font-weight:650; font-size:.88rem; }}
+        .cr-risk-value {{ color:{tone_color}; font-size:2.15rem; line-height:1.05;
+                          font-weight:800; margin:.1rem 0; }}
+        .cr-risk-sub {{ color:#cbd5e1; font-size:.86rem; }}
         .cr-section {{ margin-top:.6rem; }}
         .cr-h {{ font-weight:650; color:#cbd5e1; font-size:.85rem; margin-bottom:.15rem; }}
+        .cr-summary {{ color:#e5e7eb; line-height:1.55; }}
         .cr-quote {{ border-left:3px solid #94a3b8; padding-left:.7rem; color:#cbd5e1;
                      font-style:italic; margin:.3rem 0; }}
-        .cr-evid {{ font-size:.86rem; padding:.45rem .6rem;
-                    border:1px solid rgba(148,163,184,.22); border-radius:6px;
-                    margin:.25rem 0; background:rgba(15,23,42,.32); }}
-        .cr-safety {{ font-size:.78rem; color:#a7b0be; margin-top:.7rem;
-                      padding-top:.5rem; border-top:1px dashed rgba(148,163,184,.25); }}
+        .cr-warning {{ border:1px solid rgba(251,191,36,.38); border-radius:8px;
+                       background:rgba(251,191,36,.08); color:#fde68a;
+                       padding:.7rem .8rem; margin:.75rem 0; line-height:1.45; }}
+        .cr-rec-list {{ display:grid; gap:.5rem; margin-top:.35rem; }}
+        .cr-rec {{ display:flex; gap:.6rem; align-items:flex-start;
+                   border:1px solid rgba(148,163,184,.22); border-radius:8px;
+                   background:rgba(15,23,42,.34); padding:.65rem .75rem; }}
+        .cr-rec-num {{ flex:0 0 auto; width:1.45rem; height:1.45rem; border-radius:999px;
+                       background:rgba(96,165,250,.18); color:#93c5fd;
+                       display:inline-flex; align-items:center; justify-content:center;
+                       font-size:.8rem; font-weight:800; }}
+        .cr-rec-text {{ color:#e5e7eb; line-height:1.45; }}
         </style>
-    """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.markdown(f"<div class='cr-card'>"
-                f"<div class='cr-title'>Clinical report"
-                f"<span class='cr-conf'>{confidence.upper()}</span></div>"
-                f"<div class='cr-section'><div class='cr-h'>Summary</div>{summary}</div>"
-                f"<div class='cr-section'><div class='cr-h'>Recommendation</div>{recommendation}</div>",
-                unsafe_allow_html=True)
-
-    if evidence:
-        evid_html = "".join(
-            f"<div class='cr-evid'><b>{e.get('model','?')}</b> → "
-            f"{e.get('predicted_class','?')} (conf {e.get('confidence',0):.2f})</div>"
-            for e in evidence
-        )
-        st.markdown(f"<div class='cr-section'><div class='cr-h'>ML evidence</div>{evid_html}</div>",
-                    unsafe_allow_html=True)
-
-    if expert_quote:
-        st.markdown(f"<div class='cr-section'><div class='cr-h'>Expert insight</div>"
-                    f"<div class='cr-quote'>{expert_quote}</div></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='cr-card'>"
+        f"<div class='cr-pill'>📄 MARGE Clinical Report</div>"
+        f"<div class='cr-title'>Final clinical synthesis"
+        f"<span class='cr-conf'>{confidence.upper()}</span></div>",
+        unsafe_allow_html=True,
+    )
 
     if safety:
-        st.markdown(f"<div class='cr-safety'>{safety}</div></div>", unsafe_allow_html=True)
-    else:
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='cr-safety-top'>⚠️ {_html_text(safety)}</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        f"<div class='cr-risk'>"
+        f"<div class='cr-risk-label'>{_html_text(risk_label)}</div>"
+        f"{probability_html}"
+        f"<div class='cr-risk-sub'>{_html_text(predicted_class.replace('_', ' '))}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    summary_html = _inline_report_markup(summary)
+    st.markdown(
+        f"<div class='cr-section'><div class='cr-h'>Summary</div>"
+        f"<div class='cr-summary'>{summary_html}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    if has_insulin_warning:
+        st.markdown(
+            "<div class='cr-warning'>⚠️ <strong>One value may need to be checked again.</strong><br>"
+            "The insulin result looks unusual for this pattern. If you want a clearer result, "
+            "please repeat or confirm the insulin-related blood test with a clinician.</div>",
+            unsafe_allow_html=True,
+        )
+
+    rec_items = _recommendation_items(recommendation)
+    if rec_items:
+        rec_html = "".join(
+            f"<div class='cr-rec'><span class='cr-rec-num'>{i}</span>"
+            f"<div class='cr-rec-text'>{_inline_report_markup(item)}</div></div>"
+            for i, item in enumerate(rec_items, start=1)
+        )
+        st.markdown(
+            f"<div class='cr-section'><div class='cr-h'>Next steps</div>"
+            f"<div class='cr-rec-list'>{rec_html}</div></div>",
+            unsafe_allow_html=True,
+        )
+
+    if expert_quote:
+        st.markdown(
+            f"<div class='cr-section'><div class='cr-h'>Expert insight</div>"
+            f"<div class='cr-quote'>{_html_text(expert_quote)}</div></div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_abstain_card(payload: dict) -> None:
