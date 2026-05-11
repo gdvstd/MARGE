@@ -105,7 +105,23 @@ class TestAbstainSchema:
         assert ab_mod.TOOL_NAME == "abstain"
         assert ab_mod.TOOL_DESCRIPTION
 
-    def test_accepts_reason(self):
-        obj = ab_mod.ToolInput(reason="Models conflict.")
-        assert obj.reason == "Models conflict."
-        assert obj.fallback_recommendation  # default present
+    def test_accepts_minimal_reason(self):
+        obj = ab_mod.ToolInput(reason="Out of scope.")
+        assert obj.reason == "Out of scope."
+        # possible_directions defaults to empty list.
+        assert obj.possible_directions == []
+        # recommended_action has a default referral string.
+        assert obj.recommended_action
+        assert "clinician" in obj.recommended_action.lower()
+
+    def test_accepts_full_structured_payload(self):
+        obj = ab_mod.ToolInput(
+            reason="Dermatologic concern — catalog has no skin model.",
+            possible_directions=[
+                "Could be contact dermatitis",
+                "Could be a fungal infection",
+            ],
+            recommended_action="See a dermatologist.",
+        )
+        assert len(obj.possible_directions) == 2
+        assert obj.recommended_action == "See a dermatologist."

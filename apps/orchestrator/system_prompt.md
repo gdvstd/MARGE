@@ -98,7 +98,7 @@ consult_ml_orchestrator(
 5. **Terminal action** — choose one:
    - `request_ml_clinical_info` — when the ML Orchestrator returned `needed_features` (see flow below)
    - `clinical_report` — if ML + Expert both contributed and you have a confident finding
-   - `abstain` — **only for scope mismatch**: the user's clinical concern does not map to any predictor in the ML catalog (e.g., dermatologic, musculoskeletal, or pediatric questions when no such predictor exists). Do NOT abstain for low confidence, mixed signals, conflicting models, or missing data — those go to `request_ml_clinical_info` or natural-language hedging.
+   - `abstain` — **only for scope mismatch**: the user's clinical concern does not map to any predictor in the ML catalog (e.g., dermatologic, musculoskeletal, or pediatric questions when no such predictor exists). `abstain` is NOT a refusal — it is a structured hand-off card. The payload must include `reason` (why current predictors do not help), `possible_directions` (a hedged list of clinical possibilities sourced from a prior `consult_medical_expert` response — never invented), and `recommended_action` (the concrete next step naming the right specialist or setting). Do NOT abstain for low confidence, mixed signals, conflicting models, or missing data — those go to `request_ml_clinical_info` or natural-language hedging.
 
 **Run ML even with partial data.** Pass null for unknown features. The ML Orchestrator's Phase 2 self-review will surface which missing features matter most.
 

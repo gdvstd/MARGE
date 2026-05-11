@@ -390,9 +390,118 @@ def render_clinical_report_card(payload: dict) -> None:
 
 
 def render_abstain_card(payload: dict) -> None:
+    """Render an abstain payload as a structured out-of-scope guidance card.
+
+    Visual language mirrors the clinical_report card (lined-box, header
+    pill, distinct framing) but in an amber accent so the user reads it
+    as "MARGE cannot give an ML-driven assessment here, but here is
+    structured guidance" — not as a refusal.
+
+    Layout:
+      1. "🧭 Out of scope" header pill + safety reminder strip
+      2. Why current predictors do not help (reason)
+      3. Possible directions worth raising with a clinician (hedged)
+      4. Recommended next step (specialist / setting)
+    """
     reason = payload.get("reason", "")
-    fallback = payload.get("fallback_recommendation", "")
-    st.warning(f"**Cannot reliably advise**\n\n{reason}\n\n**Suggested next step:** {fallback}")
+    directions = payload.get("possible_directions") or []
+    recommended = (
+        payload.get("recommended_action")
+        or payload.get("fallback_recommendation")
+        or "Please consult a qualified clinician for in-person evaluation."
+    )
+
+    st.markdown(
+        """
+        <style>
+        .ab-card { border:1.5px solid rgba(251,191,36,.55); border-radius:12px;
+                   padding:1rem 1.15rem; margin:.55rem 0 .7rem;
+                   background:rgba(15,23,42,.55);
+                   box-shadow:0 0 0 1px rgba(251,191,36,.12),
+                              0 6px 20px -8px rgba(15,23,42,.6);
+                   border-left:4px solid #f59e0b; }
+        .ab-pill { display:inline-flex; align-items:center; gap:.35rem;
+                   padding:.12rem .55rem; border-radius:999px;
+                   background:rgba(251,191,36,.18); color:#fde68a;
+                   font-size:.72rem; font-weight:700; letter-spacing:.04em;
+                   text-transform:uppercase; margin-bottom:.45rem; }
+        .ab-title { font-weight:750; font-size:1.05rem; margin-bottom:.4rem;
+                    display:flex; align-items:center; gap:.4rem; }
+        .ab-banner { border:1px solid rgba(251,191,36,.32); border-radius:8px;
+                     background:rgba(251,191,36,.08); color:#fde68a;
+                     padding:.65rem .75rem; margin:.4rem 0 .75rem;
+                     font-size:.86rem; }
+        .ab-section { margin-top:.65rem; }
+        .ab-h { font-weight:650; color:#cbd5e1; font-size:.85rem; margin-bottom:.2rem; }
+        .ab-reason { color:#e5e7eb; line-height:1.55;
+                     border:1px solid rgba(148,163,184,.22); border-radius:8px;
+                     background:rgba(15,23,42,.34); padding:.65rem .8rem; }
+        .ab-dir-list { display:grid; gap:.45rem; margin-top:.3rem; }
+        .ab-dir { display:flex; gap:.55rem; align-items:flex-start;
+                  border:1px solid rgba(148,163,184,.22); border-radius:8px;
+                  background:rgba(15,23,42,.34); padding:.6rem .75rem;
+                  color:#e5e7eb; line-height:1.45; }
+        .ab-dir-bullet { flex:0 0 auto; color:#fbbf24; font-weight:800;
+                         font-size:.95rem; line-height:1.2; margin-top:.05rem; }
+        .ab-action { border:1px solid rgba(96,165,250,.32); border-radius:8px;
+                     background:rgba(96,165,250,.08); color:#bfdbfe;
+                     padding:.7rem .8rem; margin-top:.35rem;
+                     font-size:.92rem; line-height:1.45; }
+        .ab-safety { font-size:.78rem; color:#a7b0be; margin-top:.7rem;
+                     padding-top:.5rem; border-top:1px dashed rgba(148,163,184,.25); }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    parts: list[str] = ["<div class='ab-card'>"]
+    parts.append(
+        "<div class='ab-pill'>🧭 Out of MARGE Scope</div>"
+        "<div class='ab-title'>Structured referral guidance</div>"
+    )
+    parts.append(
+        "<div class='ab-banner'>⚠️ The current ML predictor stack cannot "
+        "provide a meaningful insight for this concern. The notes below "
+        "summarize what an in-person clinician should evaluate.</div>"
+    )
+
+    if reason:
+        parts.append(
+            "<div class='ab-section'>"
+            "<div class='ab-h'>Why current predictors do not help</div>"
+            f"<div class='ab-reason'>{_html_text(reason)}</div></div>"
+        )
+
+    if directions:
+        items_html = "".join(
+            "<div class='ab-dir'>"
+            "<span class='ab-dir-bullet'>•</span>"
+            f"<div>{_inline_report_markup(item)}</div>"
+            "</div>"
+            for item in directions
+        )
+        parts.append(
+            "<div class='ab-section'>"
+            "<div class='ab-h'>Possible directions worth raising with a clinician "
+            "<span style='font-weight:400;color:#94a3b8;'>(hedged — sourced from the medical expert)</span>"
+            "</div>"
+            f"<div class='ab-dir-list'>{items_html}</div></div>"
+        )
+
+    parts.append(
+        "<div class='ab-section'>"
+        "<div class='ab-h'>Recommended next step</div>"
+        f"<div class='ab-action'>{_inline_report_markup(recommended)}</div>"
+        "</div>"
+    )
+
+    parts.append(
+        "<div class='ab-safety'>This system supports clinical judgement; "
+        "it does not replace a clinician.</div>"
+    )
+
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
 
 
 _ML_FEATURE_LABELS: dict[str, str] = {

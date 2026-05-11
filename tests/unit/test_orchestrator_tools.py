@@ -128,10 +128,28 @@ class TestAbstainTool:
     def test_returns_abstention_payload(self):
         enforcer = ProtocolEnforcer()
         abst = make_abstain(enforcer)
-        out = abst(reason="Symptoms outside ML scope.")
+        out = abst(
+            reason="Symptoms outside ML scope — catalog has no dermatologic model.",
+            possible_directions=[
+                "Could be contact dermatitis from a new product",
+                "Could be a fungal infection in moist skin folds",
+            ],
+            recommended_action="See a dermatologist for skin examination.",
+        )
         assert out["abstained"] is True
         assert "scope" in out["reason"]
-        assert out["fallback_recommendation"]
+        assert len(out["possible_directions"]) == 2
+        assert "dermatologist" in out["recommended_action"]
+
+    def test_defaults_when_minimal_payload(self):
+        enforcer = ProtocolEnforcer()
+        abst = make_abstain(enforcer)
+        out = abst(reason="Out of scope.")
+        # possible_directions defaults to empty list (Chat Agent may have
+        # nothing to forward if Expert was not consulted with hedging).
+        assert out["possible_directions"] == []
+        # recommended_action has a sensible default referral string.
+        assert "clinician" in out["recommended_action"].lower()
 
     def test_records_call(self):
         enforcer = ProtocolEnforcer()
