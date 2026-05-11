@@ -8,7 +8,7 @@ with no tool call are valid turn endings under the hybrid pattern):
      and at least one consult_medical_expert have succeeded.
   C. abstain (terminal) is disallowed until at least one consult_medical_expert
      has succeeded.
-  D. request_more_info (terminal) is always allowed.
+  D. request_ml_clinical_info (terminal) is always allowed.
 
 There is no chat-as-tool wrapper: casual chat is the LLM's natural-language
 `content` and produces no tool record. ML model calls (predict_*) and
@@ -69,7 +69,7 @@ def _build_req() -> MARGEProtocolRequirement:
         _make_tool("predict_diabetes_risk"),
         _make_tool("clinical_report"),
         _make_tool("abstain"),
-        _make_tool("request_more_info"),
+        _make_tool("request_ml_clinical_info"),
     ]
     req._predict_tools = []
     req._terminal_tools = [t for t in tools if t.name in MARGEProtocolRequirement.TERMINALS]
@@ -94,7 +94,7 @@ class TestHasAnyMLPrediction:
         assert has_any_ml_prediction(_state("predict_diabetes_risk"))
 
     def test_ignores_non_predict(self):
-        assert not has_any_ml_prediction(_state("consult_medical_expert", "request_more_info"))
+        assert not has_any_ml_prediction(_state("consult_medical_expert", "request_ml_clinical_info"))
 
     def test_ignores_failed(self):
         assert not has_any_ml_prediction(
@@ -110,7 +110,7 @@ class TestHasConsultedExpert:
         assert has_consulted_expert(_state("consult_medical_expert"))
 
     def test_other_tools_dont_count(self):
-        assert not has_consulted_expert(_state("predict_diabetes_risk", "request_more_info"))
+        assert not has_consulted_expert(_state("predict_diabetes_risk", "request_ml_clinical_info"))
 
     def test_ignores_failed(self):
         assert not has_consulted_expert(
@@ -183,18 +183,18 @@ class TestAbstainGate:
         assert r.allowed
 
 
-# --------------------------- Rule D: request_more_info free ---------------------------
+# --------------------------- Rule D: request_ml_clinical_info free ---------------------------
 
 class TestRequestMoreInfoIsFree:
     def test_allowed_at_start(self):
         req = _build_req()
-        r = _rules_by_target(req, _state())["request_more_info"]
+        r = _rules_by_target(req, _state())["request_ml_clinical_info"]
         assert r.allowed
 
     def test_allowed_after_anything(self):
         req = _build_req()
         s = _state("consult_medical_expert", "predict_diabetes_risk")
-        r = _rules_by_target(req, s)["request_more_info"]
+        r = _rules_by_target(req, s)["request_ml_clinical_info"]
         assert r.allowed
 
 
@@ -207,20 +207,20 @@ class TestPreventStopAlwaysFalse:
     def test_at_start(self):
         req = _build_req()
         rules = _rules_by_target(req, _state())
-        for name in ("clinical_report", "abstain", "request_more_info"):
+        for name in ("clinical_report", "abstain", "request_ml_clinical_info"):
             assert rules[name].prevent_stop is False
 
     def test_after_consult_only(self):
         req = _build_req()
         rules = _rules_by_target(req, _state("consult_medical_expert"))
-        for name in ("clinical_report", "abstain", "request_more_info"):
+        for name in ("clinical_report", "abstain", "request_ml_clinical_info"):
             assert rules[name].prevent_stop is False
 
     def test_after_terminal(self):
         req = _build_req()
         s = _state("consult_medical_expert", "predict_diabetes_risk", "clinical_report")
         rules = _rules_by_target(req, s)
-        for name in ("clinical_report", "abstain", "request_more_info"):
+        for name in ("clinical_report", "abstain", "request_ml_clinical_info"):
             assert rules[name].prevent_stop is False
 
 

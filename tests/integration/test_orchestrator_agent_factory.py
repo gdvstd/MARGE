@@ -49,7 +49,7 @@ async def test_agent_has_base_local_tools():
         tool_names = {t.name for t in agent._tools}
     expected_local = {
         "consult_medical_expert",
-        "request_more_info",
+        "request_ml_clinical_info",
         "clinical_report",
         "abstain",
     }
@@ -127,20 +127,34 @@ async def test_chat_agent_does_not_have_consult_ml_orchestrator_without_llm():
 
 
 @pytest.mark.asyncio
-async def test_agent_has_four_tools_without_patient_db_or_llm():
-    """Without patient_db_path and without llm: exactly 4 local tools."""
+async def test_agent_has_five_tools_without_patient_db_or_llm():
+    """Without patient_db_path and without llm: 4 base local + describe_ml_features = 5.
+
+    The Chat Agent always gets `describe_ml_features` (a read-only ML MCP tool)
+    so it can translate raw feature names from the ML Orchestrator into
+    user-friendly inquiry text. predict_* stays exclusive to the ML
+    Orchestrator sub-agent.
+    """
     bundle = build_bundle()  # no llm
     async with orchestrator_agent(bundle=bundle, llm=_FakeChatModel()) as agent:
-        # 4 local tools, no MCP ML tools, no patient tools
-        assert len(agent._tools) == 4
+        assert len(agent._tools) == 5
 
 
 @pytest.mark.asyncio
-async def test_agent_has_five_tools_with_llm_but_no_patient_db():
-    """With llm but no patient DB: 4 base local + consult_ml_orchestrator = 5."""
+async def test_agent_has_six_tools_with_llm_but_no_patient_db():
+    """With llm but no patient DB: 4 base + consult_ml_orchestrator + describe_ml_features = 6."""
     bundle = build_bundle(llm=_FakeChatModel())
     async with orchestrator_agent(bundle=bundle, llm=_FakeChatModel()) as agent:
-        assert len(agent._tools) == 5
+        assert len(agent._tools) == 6
+
+
+@pytest.mark.asyncio
+async def test_chat_agent_has_describe_ml_features_tool():
+    """describe_ml_features is the only ML MCP tool exposed to the Chat Agent."""
+    bundle = build_bundle()
+    async with orchestrator_agent(bundle=bundle, llm=_FakeChatModel()) as agent:
+        tool_names = {t.name for t in agent._tools}
+    assert "describe_ml_features" in tool_names
 
 
 # ---------------------------------------------------------------------------

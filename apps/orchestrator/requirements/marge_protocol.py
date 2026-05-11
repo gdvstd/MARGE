@@ -6,7 +6,7 @@
      consult_medical_expert in the trajectory. Order is free — the two
      experts may be called interleaved multiple times.
   C. abstain (terminal) needs consult_medical_expert at least once.
-  D. request_more_info (terminal) is always allowed.
+  D. request_ml_clinical_info (terminal) is always allowed.
 
 No ordering constraint between consult_ml_orchestrator and
 consult_medical_expert — the chat agent decides dynamically which to
@@ -93,7 +93,9 @@ def has_expert_ml_expert_sequence(state: Any) -> bool:
 class MARGEProtocolRequirement(Requirement):
     """Single Requirement encoding the four MARGE protocol rules (A–D above)."""
 
-    TERMINALS = frozenset({"clinical_report", "abstain", "request_more_info"})
+    TERMINALS = frozenset(
+        {"clinical_report", "abstain", "request_ml_clinical_info"}
+    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -149,7 +151,7 @@ class MARGEProtocolRequirement(Requirement):
                         "expert at least once."
                     )
                 )
-            else:  # request_more_info — free
+            else:  # request_ml_clinical_info — free
                 allowed = True
                 reason = None
 

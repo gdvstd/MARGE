@@ -140,6 +140,8 @@ class DynamicMLAgent(MLModel):
                     json_schema_extra={
                         "label": metadata.get("label"),
                         "aliases": metadata.get("aliases", []),
+                        "unit": metadata.get("unit"),
+                        "field_type": metadata.get("field_type", "number"),
                     },
                 ),
             )

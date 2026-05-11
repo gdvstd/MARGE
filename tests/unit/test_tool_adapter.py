@@ -2,7 +2,7 @@
 
 The adapter wraps Python callables as BeeAI Tools.
 `local_tools_as_beeai(bundle)` returns the four orchestrator-local tools
-(consult_medical_expert, request_more_info, clinical_report, abstain) as
+(consult_medical_expert, request_ml_clinical_info, clinical_report, abstain) as
 BeeAI Tools with the enforcer wired in. Casual chat is natural-language
 content with no tool call (see apps/orchestrator/system_prompt.md).
 """
@@ -52,7 +52,7 @@ class TestToBeeaiTool:
 class TestLocalToolsAsBeeai:
     EXPECTED_BASE = {
         "consult_medical_expert",
-        "request_more_info",
+        "request_ml_clinical_info",
         "clinical_report",
         "abstain",
     }

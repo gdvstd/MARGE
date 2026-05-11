@@ -49,7 +49,7 @@ def _get_or_create_session_db() -> Path:
 def _reset_session() -> None:
     for key in (
         "session_id", "patients", "current_patient", "messages",
-        "csv_file_id", "orch_memory", "expert",
+        "csv_file_id", "orch_memory", "expert", "ml_orchestrator",
     ):
         st.session_state.pop(key, None)
 
@@ -226,35 +226,116 @@ _ML_FEATURE_LABELS: dict[str, str] = {
 }
 
 
-def render_request_more_info_card(payload: dict) -> None:
+def render_clinical_inquiry_card(payload: dict) -> None:
+    """Render a request_ml_clinical_info terminal as a structured inquiry card.
+
+    The card layout is intentionally distinct from a normal chat reply:
+    - Header: target condition under investigation
+    - "Already known" chips: clinical values the agent has from prior turns
+    - "Needed for confident prediction": one row per missing feature with
+      its label, why it matters (ML rationale), and a plain-language
+      explanation sourced from the model author
+    - Footer: rationale (Chat Agent's restatement of ML credibility verdict)
+    """
+    target = payload.get("target_condition", "")
     rationale = payload.get("rationale", "")
-    needed = payload.get("needed") or []
-    st.info(f"**Additional information needed**\n\n{rationale}")
-    if needed:
-        rows = "\n".join(
-            "- **{}** ({}{}): {}".format(
-                _ML_FEATURE_LABELS.get(n.get("name", ""), n.get("name", "")),
-                n.get("field_type", "text"),
-                ", " + n.get("unit") if n.get("unit") else "",
-                n.get("why", ""),
+    known = payload.get("known_features") or []
+    needed = payload.get("needed_features") or []
+
+    st.markdown(
+        """
+        <style>
+        .ci-card { border:1px solid rgba(148,163,184,.32); border-radius:10px;
+                   padding:1rem 1.1rem; margin:.4rem 0 .6rem;
+                   background:rgba(15,23,42,.45); }
+        .ci-title { font-weight:750; font-size:1.05rem; margin-bottom:.4rem;
+                    display:flex; align-items:center; gap:.4rem; }
+        .ci-target { color:#a7b0be; font-weight:550; }
+        .ci-section-h { font-weight:650; color:#cbd5e1; font-size:.85rem;
+                        margin: .8rem 0 .25rem; }
+        .ci-known-row { display:flex; flex-wrap:wrap; gap:.4rem; margin:.25rem 0; }
+        .ci-known-chip { display:inline-flex; align-items:center; gap:.25rem;
+                         padding:.18rem .55rem; border-radius:999px;
+                         background:rgba(52,211,153,.12); color:#bbf7d0;
+                         border:1px solid rgba(52,211,153,.22);
+                         font-size:.82rem; }
+        .ci-need-item { padding:.55rem .7rem;
+                        border:1px solid rgba(148,163,184,.22);
+                        border-radius:6px; margin:.3rem 0;
+                        background:rgba(15,23,42,.32); }
+        .ci-need-label { font-weight:650; color:#f1f5f9; font-size:.95rem; }
+        .ci-need-unit { color:#94a3b8; font-size:.8rem; margin-left:.35rem; }
+        .ci-need-why { color:#facc15; font-size:.78rem; margin-top:.18rem; }
+        .ci-need-explanation { color:#cbd5e1; font-size:.85rem; margin-top:.25rem; }
+        .ci-footer { color:#a7b0be; font-size:.85rem; margin-top:.7rem;
+                     padding-top:.5rem; border-top:1px dashed rgba(148,163,184,.25); }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    parts: list[str] = ["<div class='ci-card'>"]
+    parts.append(
+        f"<div class='ci-title'>📋 Clinical inquiry"
+        f"<span class='ci-target'>· {target or 'unspecified condition'}</span></div>"
+    )
+
+    if known:
+        chips = "".join(
+            "<span class='ci-known-chip'>{label}: {value}{unit}</span>".format(
+                label=item.get("label", ""),
+                value=item.get("value", ""),
+                unit=f" {item['unit']}" if item.get("unit") else "",
             )
-            for n in needed
+            for item in known
         )
-        st.markdown(rows)
+        parts.append(
+            "<div class='ci-section-h'>Already known</div>"
+            f"<div class='ci-known-row'>{chips}</div>"
+        )
+
+    if needed:
+        parts.append(
+            "<div class='ci-section-h'>Needed for a credible prediction</div>"
+        )
+        for item in needed:
+            label = item.get("label") or item.get("name", "")
+            unit = item.get("unit")
+            why = item.get("why", "")
+            explanation = item.get("explanation", "")
+            parts.append(
+                "<div class='ci-need-item'>"
+                f"<div class='ci-need-label'>{label}"
+                + (f"<span class='ci-need-unit'>({unit})</span>" if unit else "")
+                + "</div>"
+                + (f"<div class='ci-need-why'>↳ {why}</div>" if why else "")
+                + (
+                    f"<div class='ci-need-explanation'>{explanation}</div>"
+                    if explanation
+                    else ""
+                )
+                + "</div>"
+            )
+
+    if rationale:
+        parts.append(f"<div class='ci-footer'>{rationale}</div>")
+
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
 
 
 def _terminal_payload_from_events(events: list[dict]) -> tuple[str | None, dict | None]:
     """Find the last SUCCESSFUL terminal tool call in this turn's events; return (name, input).
 
-    Only structured terminals (clinical_report / abstain / request_more_info)
+    Only structured terminals (clinical_report / abstain / request_ml_clinical_info)
     have UI cards. Casual chat lives in the streamed natural-language content
     and produces no terminal record.
 
     A terminal is considered "rejected" when its tool_output contains an "error"
-    key (e.g., request_more_info validation rejected a non-ML feature name).
+    key (e.g., request_ml_clinical_info validation rejected a non-ML feature name).
     Rejected terminals are skipped so the UI does not render a stale card.
     """
-    terminals = {"clinical_report", "abstain", "request_more_info"}
+    terminals = {"clinical_report", "abstain", "request_ml_clinical_info"}
     for i, e in enumerate(reversed(events)):
         if not (
             e.get("kind") == "tool_call"
@@ -302,8 +383,8 @@ def render_terminal_card(events: list[dict]) -> None:
         render_clinical_report_card(payload)
     elif name == "abstain":
         render_abstain_card(payload)
-    elif name == "request_more_info":
-        render_request_more_info_card(payload)
+    elif name == "request_ml_clinical_info":
+        render_clinical_inquiry_card(payload)
 
 
 def render_report(text: str) -> None:
@@ -494,6 +575,22 @@ def _get_or_create_expert():
     return st.session_state["expert"]
 
 
+def _get_or_create_ml_orchestrator():
+    """Persist the session-scoped MLOrchestratorAgent across user turns.
+
+    Mirrors `_get_or_create_expert`: a single MLOrchestratorAgent instance
+    with its own LLM (Role.ML_ORCHESTRATOR) and its own conversation
+    memory. The instance is reused across `consult_ml_orchestrator` calls
+    so the ML sub-agent remembers prior predictions/feature questions
+    within a session. Its tool events stream out through `set_event_sink`
+    and are routed to a dedicated 'ML Expert' bubble in the UI.
+    """
+    if "ml_orchestrator" not in st.session_state:
+        from services.ml_orchestrator_agent.agent import MLOrchestratorAgent
+        st.session_state["ml_orchestrator"] = MLOrchestratorAgent.from_env()
+    return st.session_state["ml_orchestrator"]
+
+
 _TOOL_PROGRESS_FALLBACK = {
     "consult_medical_expert":      "🩺 Consulting the medical expert…",
     "search_medical_web":          "🔎 Searching medical web sources…",
@@ -502,7 +599,8 @@ _TOOL_PROGRESS_FALLBACK = {
     "get_patient":                 "📁 Fetching patient record…",
     "list_patients":               "📁 Listing patients…",
     "update_patient":              "📁 Updating patient record…",
-    "request_more_info":           "❓ Requesting additional information…",
+    "request_ml_clinical_info":    "📋 Preparing clinical inquiry…",
+    "describe_ml_features":        "📖 Looking up ML feature documentation…",
     "clinical_report":             "📝 Drafting the clinical report…",
     "abstain":                     "⚠ Explaining the scope boundary…",
 }
@@ -625,11 +723,12 @@ def stream_analysis(
     state.setdefault("events", [])
     events: list[dict] = state["events"]
 
-    # Capture the per-session memory and expert in the main Streamlit thread
-    # before launching the worker thread (st.session_state access from the
-    # worker thread is unreliable).
+    # Capture the per-session memory, expert, and ML orchestrator in the
+    # main Streamlit thread before launching the worker thread
+    # (st.session_state access from the worker thread is unreliable).
     orch_memory = _get_or_create_orch_memory()
     expert = _get_or_create_expert()
+    ml_orchestrator = _get_or_create_ml_orchestrator()
 
     async def _run() -> None:
         if patient_handle:
@@ -650,7 +749,12 @@ def stream_analysis(
         def _on_sub_response(agent_name: str, response: str) -> None:
             eq.put(("sub_agent", {"agent": agent_name, "response": response}))
 
-        bundle = build_bundle(expert=expert, llm=llm, on_sub_response=_on_sub_response)
+        bundle = build_bundle(
+            expert=expert,
+            llm=llm,
+            on_sub_response=_on_sub_response,
+            ml_orchestrator=ml_orchestrator,
+        )
 
         _log("turn_start", {"prompt": prompt[:120]})
 
@@ -662,6 +766,8 @@ def stream_analysis(
 
         if hasattr(expert, "set_event_sink"):
             expert.set_event_sink(lambda event: eq.put(("expert_event", event)))
+        if hasattr(ml_orchestrator, "set_event_sink"):
+            ml_orchestrator.set_event_sink(lambda event: eq.put(("ml_event", event)))
 
         # Do not attach LLM token streaming here. Some OpenAI-compatible
         # backends emit `new_token` chunks without the first generated token
@@ -768,6 +874,8 @@ def stream_analysis(
         finally:
             if hasattr(expert, "set_event_sink"):
                 expert.set_event_sink(None)
+            if hasattr(ml_orchestrator, "set_event_sink"):
+                ml_orchestrator.set_event_sink(None)
             eq.put(None)
 
     threading.Thread(target=lambda: asyncio.run(_run()), daemon=True).start()
@@ -787,6 +895,19 @@ def stream_analysis(
         return repr(obj)[:500]
 
     def _generator():
+        """Yield structured items so the UI can route each event to the
+        right bubble:
+
+        - ("orch_event", event_dict): orchestrator-level tool call/output
+          (patient MCP, request_ml_clinical_info, …). Belongs to the MARGE bubble.
+        - ("sub_event", role_name, event_dict): a sub-agent's own tool
+          call/output. role_name is the display bubble name
+          ("Medical Expert" / "ML Expert"). Belongs to that sub-agent's
+          bubble.
+        - ("sub_done", role_name, response_text): a sub-agent's final
+          response text. Marks the sub-bubble as done so its trace can
+          collapse.
+        """
         while True:
             item = eq.get(timeout=300)
             if item is None:
@@ -796,44 +917,26 @@ def stream_analysis(
                 events.append({"kind": "reasoning_token", "text": payload})
                 continue
             elif kind == "sub_agent":
-                # Sub-agent response — yielded as a special sentinel tuple
-                # so the UI can render it as a separate chat bubble.
-                yield ("sub_agent", payload["agent"], payload["response"])
+                yield ("sub_done", payload["agent"], payload["response"])
                 continue
             elif kind == "tool_call":
-                events.append({"kind": "tool_call", **_to_jsonable(payload)})
-                yield (
-                    f"\n\n{_tool_progress_message(payload['name'], payload.get('agent'))}"
-                    "\n\n"
-                )
+                ev = {"kind": "tool_call", **_to_jsonable(payload)}
+                events.append(ev)
+                yield ("orch_event", ev)
             elif kind == "tool_output":
-                events.append({"kind": "tool_output", **_to_jsonable(payload)})
-                if payload.get("success"):
-                    out_str = json.dumps(payload.get("output"), ensure_ascii=False,
-                                         default=str)
-                    snippet = (out_str[:200] + "…") if len(out_str) > 200 else out_str
-                    yield f"  ✓ `{snippet}`\n\n"
-                else:
-                    err = payload.get("error", "(unknown)")
-                    yield f"\n\n  ❌ **{payload.get('name')} failed:** `{err}`\n\n"
+                ev = {"kind": "tool_output", **_to_jsonable(payload)}
+                events.append(ev)
+                yield ("orch_event", ev)
             elif kind == "expert_event":
-                event = _to_jsonable(payload)
-                events.append(event)
-                _log("expert_tool_event", event)
-                if event.get("kind") == "tool_call":
-                    yield (
-                        f"\n\n{_tool_progress_message(event['name'], event.get('agent'))}"
-                        "\n\n"
-                    )
-                elif event.get("kind") == "tool_output" and event.get("success", True):
-                    out_str = json.dumps(event.get("output"), ensure_ascii=False, default=str)
-                    snippet = (out_str[:200] + "…") if len(out_str) > 200 else out_str
-                    yield f"  ✓ `{snippet}`\n\n"
-                elif event.get("kind") == "tool_output" and not event.get("success", True):
-                    err = event.get("error", "(unknown)")
-                    yield f"\n\n  ❌ **{event.get('name')} failed:** `{err}`\n\n"
-        # Final response is NOT yielded here — the UI appends it as a separate
-        # MARGE segment so the order is: MARGE tool calls → sub-agents → MARGE final.
+                ev = _to_jsonable(payload)
+                events.append(ev)
+                _log("expert_tool_event", ev)
+                yield ("sub_event", "Medical Expert", ev)
+            elif kind == "ml_event":
+                ev = _to_jsonable(payload)
+                events.append(ev)
+                _log("ml_tool_event", ev)
+                yield ("sub_event", "ML Expert", ev)
 
     return _generator()
 
@@ -911,17 +1014,88 @@ def _app_main() -> None:
 
     _AGENT_AVATARS = {"MARGE": "🏥", "ML Expert": "🤖", "Medical Expert": "🩺"}
 
+    def _render_trace_block(trace: list[dict]) -> None:
+        """Render a sub-agent's per-bubble trace (tool_call / tool_output).
+
+        Used inside an expander so each sub-agent's tool history stays
+        scoped to its own bubble, never bleeding into the main MARGE
+        bubble. Mirrors the body of `render_events_timeline` minus the
+        outer expander.
+        """
+        for i, ev in enumerate(trace):
+            kind = ev.get("kind")
+            if kind == "tool_call":
+                inp = ev.get("input")
+                inp_text = (
+                    json.dumps(inp, indent=2, ensure_ascii=False, default=str)
+                    if inp else "(no input)"
+                )
+                st.markdown(f"**[{i:02d}] → call** `{ev.get('name')}`")
+                st.code(inp_text, language="json")
+            elif kind == "tool_output":
+                ok = ev.get("success", True)
+                tag = "✓ ok" if ok else "✗ ERROR"
+                pl = ev.get("output") if ok else ev.get("error")
+                pl_text = (
+                    json.dumps(pl, indent=2, ensure_ascii=False, default=str)
+                    if isinstance(pl, (dict, list))
+                    else str(pl)
+                )
+                st.markdown(
+                    f"**[{i:02d}] ← return** `{ev.get('name')}` · _{tag}_"
+                )
+                st.code(pl_text, language="json" if ok else "text")
+
     def _render_segments(placeholder, segments: list[dict], events: list[dict]) -> None:
         with placeholder.container():
             for i, seg in enumerate(segments):
                 role = seg["role"]
                 avatar = _AGENT_AVATARS.get(role, "assistant")
+                trace = seg.get("trace") or []
+                status = seg.get("status", "done")
+                content = seg.get("content", "") or ""
                 with st.chat_message(role, avatar=avatar):
-                    st.markdown(seg["content"])
-                    # Terminal card and timeline only on the last MARGE segment
-                    if role == "MARGE" and i == len(segments) - 1 and events:
-                        render_terminal_card(events)
-                        render_events_timeline(events)
+                    if role == "MARGE":
+                        if content:
+                            st.markdown(content)
+                        # Terminal card and timeline only on the last MARGE segment
+                        if i == len(segments) - 1 and events:
+                            render_terminal_card(events)
+                            render_events_timeline(events)
+                    else:
+                        # Sub-agent bubble: trace lives in an expander (open
+                        # while still working, collapsed once the final
+                        # answer arrives), final text below.
+                        if status == "live":
+                            n_calls = sum(
+                                1 for e in trace if e.get("kind") == "tool_call"
+                            )
+                            label = (
+                                f"Working… · {n_calls} tool call(s)"
+                                if n_calls else
+                                "Working…"
+                            )
+                            with st.expander(label, expanded=True):
+                                if trace:
+                                    _render_trace_block(trace)
+                                else:
+                                    st.caption("_thinking…_")
+                            if content:
+                                st.markdown(content)
+                        else:
+                            if content:
+                                st.markdown(content)
+                            if trace:
+                                n_calls = sum(
+                                    1 for e in trace if e.get("kind") == "tool_call"
+                                )
+                                label = (
+                                    f"Trace · {n_calls} tool call(s)"
+                                    if n_calls else
+                                    f"Trace · {len(trace)} event(s)"
+                                )
+                                with st.expander(label, expanded=False):
+                                    _render_trace_block(trace)
 
     for message in st.session_state.messages:
         if message["role"] == "user":
@@ -945,26 +1119,90 @@ def _app_main() -> None:
         stream_state: dict = {"response": "", "trajectory": [], "error": None, "events": []}
         live_placeholder = st.empty()
 
-        # segments: [{role, avatar, content}, ...]
-        segments: list[dict] = [{"role": "MARGE", "content": ""}]
+        # segments model:
+        #   [{role, content, trace: list[dict], status: "live"|"done"}, ...]
+        # - segments[0] is the MARGE main bubble; during streaming it shows
+        #   orchestrator-only tool progress, then is replaced by the final
+        #   answer.
+        # - Sub-agent segments are created lazily the first time we see a
+        #   tool event or final response from that sub-agent.
+        segments: list[dict] = [
+            {"role": "MARGE", "content": "", "trace": [], "status": "live"}
+        ]
+        sub_by_role: dict[str, dict] = {}
+
+        def _ensure_sub_segment(role: str) -> dict:
+            seg = sub_by_role.get(role)
+            if seg is not None:
+                return seg
+            seg = {"role": role, "content": "", "trace": [], "status": "live"}
+            segments.append(seg)
+            sub_by_role[role] = seg
+            return seg
+
+        def _append_orch_progress(ev: dict) -> None:
+            kind = ev.get("kind")
+            if kind == "tool_call":
+                segments[0]["content"] += (
+                    "\n\n"
+                    + _tool_progress_message(ev.get("name", ""), "orchestrator")
+                    + "\n\n"
+                )
+            elif kind == "tool_output":
+                if ev.get("success", True):
+                    out_str = json.dumps(
+                        ev.get("output"), ensure_ascii=False, default=str
+                    )
+                    snippet = (out_str[:200] + "…") if len(out_str) > 200 else out_str
+                    segments[0]["content"] += f"  ✓ `{snippet}`\n\n"
+                else:
+                    err = ev.get("error", "(unknown)")
+                    segments[0]["content"] += (
+                        f"\n\n  ❌ **{ev.get('name')} failed:** `{err}`\n\n"
+                    )
 
         def _render_live() -> None:
             _render_segments(live_placeholder, segments, stream_state.get("events", []))
 
         for chunk in stream_analysis(user_input, current_patient, db_path, stream_state):
-            if isinstance(chunk, tuple) and len(chunk) == 3 and chunk[0] == "sub_agent":
-                _, agent_name, agent_response = chunk
-                segments.append({"role": agent_name, "content": agent_response})
+            if isinstance(chunk, tuple):
+                tag = chunk[0]
+                if tag == "orch_event":
+                    ev = chunk[1]
+                    segments[0]["trace"].append(ev)
+                    _append_orch_progress(ev)
+                elif tag == "sub_event":
+                    role = chunk[1]
+                    ev = chunk[2]
+                    seg = _ensure_sub_segment(role)
+                    seg["trace"].append(ev)
+                elif tag == "sub_done":
+                    role = chunk[1]
+                    response = chunk[2]
+                    seg = _ensure_sub_segment(role)
+                    seg["content"] = response
+                    seg["status"] = "done"
+                # Unknown structured tag — ignore.
             else:
+                # Legacy fallback: any raw string goes to the MARGE main bubble.
                 segments[0]["content"] += str(chunk)
             _render_live()
 
-        # Restructure: drop the tool-call MARGE segment, keep sub-agents,
-        # then add ONE MARGE segment at the end with the final response.
-        # Result: [Expert?, ML Expert?] → [MARGE final] — single MARGE icon.
+        # Restructure: drop the live MARGE tool-progress segment, keep
+        # sub-agents (now collapsed via status="done"), then add ONE MARGE
+        # segment at the end with the final response.
         sub_segments = [s for s in segments if s["role"] != "MARGE"]
+        for s in sub_segments:
+            if s.get("status") != "done":
+                s["status"] = "done"
+
         final_response = stream_state.get("response", "")
-        marge_final: dict = {"role": "MARGE", "content": final_response or ""}
+        marge_final: dict = {
+            "role": "MARGE",
+            "content": final_response or "",
+            "trace": [],
+            "status": "done",
+        }
         if stream_state.get("error"):
             marge_final["content"] += f"\n\n❌ `{stream_state['error']}`"
         segments = sub_segments + [marge_final]

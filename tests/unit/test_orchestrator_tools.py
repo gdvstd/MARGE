@@ -2,7 +2,7 @@
 
 Four local tools after the hybrid refactor:
 - consult_expert     — sub-agent invocation; records call
-- request_more_info  — terminal, free; records call
+- request_ml_clinical_info  — terminal, free; records call
 - clinical_report    — terminal, gated by Requirement; records call (no in-tool gate)
 - abstain            — terminal, gated by Requirement; records call
 
@@ -18,7 +18,7 @@ from apps.orchestrator.middleware.enforce_protocol import ProtocolEnforcer
 from apps.orchestrator.tools.abstain import make_abstain
 from apps.orchestrator.tools.clinical_report import make_clinical_report
 from apps.orchestrator.tools.consult_expert import make_consult_expert
-from apps.orchestrator.tools.request_more_info import make_request_more_info
+from apps.orchestrator.tools.request_ml_clinical_info import make_request_ml_clinical_info
 from packages.schemas.retrieval import MedicalExpertResponse
 from services.medical_expert_agent.agent import StubMedicalExpert
 
@@ -39,24 +39,64 @@ class TestConsultExpertTool:
         assert enforcer.has_called("consult_medical_expert")
 
 
-class TestRequestMoreInfoTool:
+class TestRequestMlClinicalInfoTool:
     def test_returns_structured_payload(self):
         enforcer = ProtocolEnforcer()
-        ask = make_request_more_info(enforcer)
+        ask = make_request_ml_clinical_info(enforcer)
         out = ask(
-            needed=[{"name": "HbA1c", "why": "diabetes confirm",
-                     "field_type": "number", "unit": "%"}],
-            rationale="Refines diabetes risk",
+            target_condition="type-2 diabetes risk",
+            needed_features=[
+                {
+                    "name": "plas",
+                    "label": "Blood sugar",
+                    "why": "top SHAP driver, missing",
+                    "explanation": "Recent fasting glucose result.",
+                    "field_type": "number",
+                    "unit": "mg/dL",
+                }
+            ],
+            known_features=[
+                {"label": "BMI", "value": "24.1", "unit": "kg/m²"}
+            ],
+            rationale="Insulin and plasma glucose would lift confidence.",
         )
         assert out["needs_more_info"] is True
-        assert out["needed"][0]["name"] == "HbA1c"
-        assert out["rationale"] == "Refines diabetes risk"
+        assert out["target_condition"] == "type-2 diabetes risk"
+        assert out["needed_features"][0]["name"] == "plas"
+        assert out["known_features"][0]["label"] == "BMI"
+        assert "lift confidence" in out["rationale"]
 
     def test_records_call(self):
         enforcer = ProtocolEnforcer()
-        ask = make_request_more_info(enforcer)
-        ask(needed=[], rationale="x")
-        assert enforcer.has_called("request_more_info")
+        ask = make_request_ml_clinical_info(enforcer)
+        ask(
+            target_condition="x",
+            needed_features=[],
+            rationale="x",
+        )
+        assert enforcer.has_called("request_ml_clinical_info")
+
+    def test_whitelist_rejects_non_catalog_feature(self):
+        enforcer = ProtocolEnforcer()
+        ask = make_request_ml_clinical_info(
+            enforcer, valid_feature_names=frozenset({"plas", "mass"})
+        )
+        out = ask(
+            target_condition="diabetes",
+            needed_features=[
+                {
+                    "name": "symptoms",  # not in whitelist
+                    "label": "Symptoms",
+                    "why": "?",
+                    "explanation": "?",
+                }
+            ],
+            rationale="?",
+        )
+        assert "error" in out
+        assert "symptoms" in out["error"]
+        # Tool was rejected — enforcer should NOT have recorded the call.
+        assert not enforcer.has_called("request_ml_clinical_info")
 
 
 class TestClinicalReportTool:

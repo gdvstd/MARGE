@@ -11,6 +11,9 @@ from typing import Any
 from fastmcp import FastMCP
 
 from packages.schemas.prediction import Prediction
+from services.ml_mcp_server.feature_descriptions import (
+    describe_ml_features as _describe_ml_features,
+)
 from services.ml_mcp_server.models._base import MLModel
 from services.ml_mcp_server.registry import discover_models
 
@@ -30,10 +33,37 @@ def _register(mcp: FastMCP, model: MLModel) -> None:
     mcp.tool(tool_fn)
 
 
+def _register_describe_features(mcp: FastMCP) -> None:
+    """Register the documentation-lookup tool.
+
+    Distinct from `predict_*`: this is read-only metadata and is the only
+    ML MCP tool the Chat Agent ever sees (filtered on the orchestrator
+    side). The ML Orchestrator sees both this and the `predict_*` family.
+    """
+
+    def describe_ml_features(
+        model_name: str | None = None,
+        feature_names: list[str] | None = None,
+    ) -> list[dict]:
+        """Look up author-written documentation for ML model input features.
+
+        Use this when you have a feature name (e.g., 'plas') and need to
+        present it to a user in plain language: returns label, plain
+        description, unit, field_type, and any aliases the author noted.
+        Both filters are optional; use `feature_names` to look up specific
+        features by name and `model_name` to scope the lookup to one model.
+        """
+        descs = _describe_ml_features(model_name, feature_names)
+        return [d.model_dump(mode="json") for d in descs]
+
+    mcp.tool(describe_ml_features)
+
+
 def build_server() -> FastMCP:
     mcp = FastMCP("ml-models")
     for model in discover_models():
         _register(mcp, model)
+    _register_describe_features(mcp)
     return mcp
 
 

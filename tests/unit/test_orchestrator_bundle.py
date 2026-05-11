@@ -7,7 +7,7 @@ ARCHITECTURE (3-agent):
   Chat Agent (orchestrator) has:
   - consult_ml_orchestrator   (if llm provided)
   - consult_medical_expert
-  - request_more_info
+  - request_ml_clinical_info
   - clinical_report
   - abstain
   No direct predict_* tools (those belong to ML Orchestrator).
@@ -27,7 +27,7 @@ from apps.orchestrator.middleware.enforce_protocol import ProtocolEnforcer
 
 _BASE_LOCAL_TOOLS = {
     "consult_medical_expert",
-    "request_more_info",
+    "request_ml_clinical_info",
     "clinical_report",
     "abstain",
 }

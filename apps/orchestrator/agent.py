@@ -45,7 +45,9 @@ from apps.orchestrator.requirements.marge_protocol import (
 from apps.orchestrator.tools.abstain import make_abstain
 from apps.orchestrator.tools.clinical_report import make_clinical_report
 from apps.orchestrator.tools.consult_expert import make_consult_expert
-from apps.orchestrator.tools.request_more_info import make_request_more_info
+from apps.orchestrator.tools.request_ml_clinical_info import (
+    make_request_ml_clinical_info,
+)
 from services.medical_expert_agent.agent import StubMedicalExpert
 
 if TYPE_CHECKING:
@@ -76,7 +78,7 @@ def _build_ml_catalog() -> tuple[str, frozenset[str]]:
     Returns:
         (catalog_text, valid_feature_names) — the catalog string for injection
         into the system prompt, and a frozenset of all valid ML input feature
-        names across all registered models (used to gate request_more_info).
+        names across all registered models (used to gate request_ml_clinical_info).
     """
     from services.ml_mcp_server.registry import discover_models
 
@@ -101,16 +103,26 @@ def _build_ml_catalog() -> tuple[str, frozenset[str]]:
     return "\n".join(lines), frozenset(all_feature_names)
 
 
-def build_bundle(expert: Any = None, llm: Any = None, on_sub_response: Any = None) -> OrchestratorBundle:
+def build_bundle(
+    expert: Any = None,
+    llm: Any = None,
+    on_sub_response: Any = None,
+    ml_orchestrator: Any = None,
+) -> OrchestratorBundle:
     """Build the Chat Agent's deterministic dependencies.
 
     Args:
         expert: Optional MedicalExpert implementation. Defaults to
             `StubMedicalExpert` (deterministic test stub). Production
             use should pass the live BeeAI sub-agent expert.
-        llm: Optional ChatModel. When provided, `consult_ml_orchestrator`
-            is added to local_tools, enabling the Chat Agent to delegate
-            ML predictions to the ML Orchestrator sub-agent.
+        llm: Optional ChatModel. When provided (and `ml_orchestrator`
+            is not), `consult_ml_orchestrator` is added to local_tools
+            backed by a per-call context-managed ML Orchestrator.
+        ml_orchestrator: Optional session-persistent `MLOrchestratorAgent`
+            instance. When provided, `consult_ml_orchestrator` routes
+            through this instance (memory persists across consultations
+            and tool events flow through its event sink). Takes precedence
+            over `llm`-based fallback.
     """
     enforcer = ProtocolEnforcer()
     if expert is None:
@@ -120,17 +132,22 @@ def build_bundle(expert: Any = None, llm: Any = None, on_sub_response: Any = Non
 
     local_tools: dict[str, Any] = {
         "consult_medical_expert": make_consult_expert(expert, enforcer, on_sub_response),
-        "request_more_info": make_request_more_info(enforcer, valid_feature_names),
+        "request_ml_clinical_info": make_request_ml_clinical_info(
+            enforcer, valid_feature_names
+        ),
         "clinical_report": make_clinical_report(enforcer),
         "abstain": make_abstain(enforcer),
     }
 
-    if llm is not None:
+    if llm is not None or ml_orchestrator is not None:
         from apps.orchestrator.tools.consult_ml_orchestrator import (
             make_consult_ml_orchestrator,
         )
         local_tools["consult_ml_orchestrator"] = make_consult_ml_orchestrator(
-            llm=llm, enforcer=enforcer, on_response=on_sub_response
+            llm=llm,
+            enforcer=enforcer,
+            on_response=on_sub_response,
+            ml_orchestrator=ml_orchestrator,
         )
 
     raw_prompt = _SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
@@ -174,6 +191,7 @@ async def orchestrator_agent(
     from fastmcp import Client
 
     from apps.orchestrator.tools._adapter import local_tools_as_beeai
+    from services.ml_mcp_server.server import build_server as build_ml_server
 
     local_tools = local_tools_as_beeai(bundle)
 
@@ -186,41 +204,55 @@ async def orchestrator_agent(
                 bundle.enforcer.record(tool_name)
         return _record
 
-    if patient_db_path is not None:
-        from services.patient_data_mcp_server.server import build_patient_server
+    # Open the ML MCP server but expose ONLY `describe_ml_features` to the
+    # Chat Agent. The predict_* tools stay exclusive to the ML Orchestrator
+    # sub-agent (which opens its own client). The Chat Agent uses the
+    # describe tool to translate raw feature names from the ML Orchestrator's
+    # `needed_features` into user-facing labels / units / descriptions.
+    ml_server = build_ml_server()
+    async with Client(ml_server) as ml_client:
+        ml_tools_all = await MCPTool.from_client(ml_client.session)
+        ml_describe_tools = [
+            t for t in ml_tools_all if t.name == "describe_ml_features"
+        ]
+        for t in ml_describe_tools:
+            t.emitter.match("*", _make_recorder(t.name))
 
-        patient_server = build_patient_server(patient_db_path)
-        async with Client(patient_server) as patient_client:
-            patient_tools = await MCPTool.from_client(patient_client.session)
-            for t in patient_tools:
-                t.emitter.match("*", _make_recorder(t.name))
+        if patient_db_path is not None:
+            from services.patient_data_mcp_server.server import build_patient_server
 
+            patient_server = build_patient_server(patient_db_path)
+            async with Client(patient_server) as patient_client:
+                patient_tools = await MCPTool.from_client(patient_client.session)
+                for t in patient_tools:
+                    t.emitter.match("*", _make_recorder(t.name))
+
+                agent = RequirementAgent(
+                    llm=llm,
+                    memory=memory,
+                    tools=[*local_tools, *patient_tools, *ml_describe_tools],
+                    requirements=[build_marge_protocol_requirement()],
+                    name="MARGE Orchestrator",
+                    description=(
+                        "Clinical ML head researcher: coordinates with the ML Orchestrator "
+                        "sub-agent, manages patient data, and consults a medical expert."
+                    ),
+                    instructions=bundle.system_prompt,
+                    final_answer_as_tool=False,
+                )
+                yield agent
+        else:
             agent = RequirementAgent(
                 llm=llm,
                 memory=memory,
-                tools=[*local_tools, *patient_tools],
+                tools=[*local_tools, *ml_describe_tools],
                 requirements=[build_marge_protocol_requirement()],
                 name="MARGE Orchestrator",
                 description=(
                     "Clinical ML head researcher: coordinates with the ML Orchestrator "
-                    "sub-agent, manages patient data, and consults a medical expert."
+                    "sub-agent and consults a medical expert."
                 ),
                 instructions=bundle.system_prompt,
                 final_answer_as_tool=False,
             )
             yield agent
-    else:
-        agent = RequirementAgent(
-            llm=llm,
-            memory=memory,
-            tools=local_tools,
-            requirements=[build_marge_protocol_requirement()],
-            name="MARGE Orchestrator",
-            description=(
-                "Clinical ML head researcher: coordinates with the ML Orchestrator "
-                "sub-agent and consults a medical expert."
-            ),
-            instructions=bundle.system_prompt,
-            final_answer_as_tool=False,
-        )
-        yield agent

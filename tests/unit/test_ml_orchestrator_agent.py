@@ -270,7 +270,7 @@ class TestMlOrchestratorAgentContextManager:
             "consult_ml_orchestrator",
             "clinical_report",
             "abstain",
-            "request_more_info",
+            "request_ml_clinical_info",
         }
 
         async with ml_orchestrator_agent(llm=FakeLLM()) as agent:

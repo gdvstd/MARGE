@@ -12,7 +12,7 @@ from apps.orchestrator.tools import (
     abstain as ab_mod,
     clinical_report as cr_mod,
     consult_expert as ce_mod,
-    request_more_info as rmi_mod,
+    request_ml_clinical_info as rmi_mod,
 )
 
 
@@ -31,22 +31,47 @@ class TestConsultExpertSchema:
         assert obj.findings == {}
 
 
-class TestRequestMoreInfoSchema:
+class TestRequestMlClinicalInfoSchema:
     def test_constants_exposed(self):
-        assert rmi_mod.TOOL_NAME == "request_more_info"
+        assert rmi_mod.TOOL_NAME == "request_ml_clinical_info"
         assert rmi_mod.TOOL_DESCRIPTION
 
-    def test_accepts_needed_and_rationale(self):
+    def test_accepts_full_payload(self):
         obj = rmi_mod.ToolInput(
-            needed=[{"name": "HbA1c", "why": "confirm diabetes"}],
-            rationale="HbA1c clarifies the diabetes risk estimate.",
+            target_condition="type-2 diabetes risk",
+            known_features=[
+                {"label": "BMI", "value": "24.1", "unit": "kg/m²"}
+            ],
+            needed_features=[
+                {
+                    "name": "plas",
+                    "label": "Blood sugar",
+                    "why": "top SHAP driver, missing",
+                    "explanation": "Recent fasting glucose result.",
+                    "field_type": "number",
+                    "unit": "mg/dL",
+                }
+            ],
+            rationale="Plasma glucose would lift confidence.",
         )
-        assert obj.needed[0].name == "HbA1c"
-        assert obj.needed[0].field_type == "text"  # default
+        assert obj.target_condition == "type-2 diabetes risk"
+        assert obj.needed_features[0].name == "plas"
+        assert obj.needed_features[0].field_type == "number"
+        assert obj.known_features[0].label == "BMI"
 
-    def test_rejects_missing_rationale(self):
+    def test_known_features_defaults_to_empty(self):
+        obj = rmi_mod.ToolInput(
+            target_condition="x",
+            needed_features=[],
+            rationale="r",
+        )
+        assert obj.known_features == []
+
+    def test_rejects_missing_required_fields(self):
         with pytest.raises(ValidationError):
-            rmi_mod.ToolInput(needed=[])
+            rmi_mod.ToolInput(needed_features=[])
+        with pytest.raises(ValidationError):
+            rmi_mod.ToolInput(target_condition="x", rationale="r")
 
 
 class TestClinicalReportSchema:

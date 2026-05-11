@@ -31,7 +31,7 @@ from apps.orchestrator.tools import (
     clinical_report as _cr,
     consult_expert as _ce,
     consult_ml_orchestrator as _cmo,
-    request_more_info as _rmi,
+    request_ml_clinical_info as _rmi,
 )
 
 if TYPE_CHECKING:
@@ -90,9 +90,10 @@ def to_beeai_tool(
 def local_tools_as_beeai(bundle: "OrchestratorBundle") -> list["Tool"]:
     """Convert local tools in `bundle` into BeeAI Tools.
 
-    Always converts the 4 base tools (consult_medical_expert, request_more_info,
-    clinical_report, abstain). Also adds consult_ml_orchestrator when it is
-    present in `bundle.local_tools` (i.e., when build_bundle(llm=...) was used).
+    Always converts the 4 base tools (consult_medical_expert,
+    request_ml_clinical_info, clinical_report, abstain). Also adds
+    consult_ml_orchestrator when it is present in `bundle.local_tools`
+    (i.e., when build_bundle(llm=...) was used).
     """
     tools: list["Tool"] = []
     for mod in _BASE_TOOL_MODULES:

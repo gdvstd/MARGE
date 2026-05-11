@@ -7,7 +7,7 @@ correct shape for each scenario.
 In the hybrid pattern there is no chat-as-tool wrapper — natural-language
 chat lives in the LLM's `content` field and produces no enforcer record.
 The four tool actions tracked here are: `consult_medical_expert`,
-`predict_*` (simulated), `clinical_report`, `request_more_info`,
+`predict_*` (simulated), `clinical_report`, `request_ml_clinical_info`,
 `abstain`.
 
 The actual gate enforcement is now LLM-side via `MARGEProtocolRequirement`;
@@ -22,7 +22,7 @@ from apps.orchestrator.middleware.enforce_protocol import ProtocolEnforcer
 from apps.orchestrator.tools.abstain import make_abstain
 from apps.orchestrator.tools.clinical_report import make_clinical_report
 from apps.orchestrator.tools.consult_expert import make_consult_expert
-from apps.orchestrator.tools.request_more_info import make_request_more_info
+from apps.orchestrator.tools.request_ml_clinical_info import make_request_ml_clinical_info
 from services.medical_expert_agent.agent import StubMedicalExpert
 
 
@@ -32,7 +32,7 @@ def deps():
     return {
         "enforcer": enforcer,
         "consult": make_consult_expert(StubMedicalExpert(), enforcer),
-        "request": make_request_more_info(enforcer),
+        "request": make_request_ml_clinical_info(enforcer),
         "report": make_clinical_report(enforcer),
         "abstain": make_abstain(enforcer),
     }
@@ -68,14 +68,24 @@ async def test_scope_mismatch_path_ends_in_abstain(deps):
 
 
 @pytest.mark.asyncio
-async def test_request_more_info_path_terminates_without_ml(deps):
+async def test_request_ml_clinical_info_path_terminates_without_ml(deps):
     deps["request"](
-        needed=[{"name": "HbA1c", "why": "confirm diabetes range"}],
-        rationale="HbA1c materially shifts diabetes risk.",
+        target_condition="type-2 diabetes risk",
+        needed_features=[
+            {
+                "name": "plas",
+                "label": "Blood sugar",
+                "why": "confirm diabetes range",
+                "explanation": "Recent fasting glucose result.",
+                "field_type": "number",
+                "unit": "mg/dL",
+            }
+        ],
+        rationale="Plasma glucose materially shifts diabetes risk.",
     )
 
     traj = deps["enforcer"].trajectory
-    assert traj == ("request_more_info",)
+    assert traj == ("request_ml_clinical_info",)
 
 
 @pytest.mark.asyncio
@@ -91,8 +101,12 @@ async def test_natural_language_only_turn_records_no_tool_calls(deps):
 async def test_multiple_consult_calls_within_one_turn(deps):
     await deps["consult"](question="A", findings={})
     await deps["consult"](question="B", findings={})
-    deps["request"](needed=[], rationale="x")
+    deps["request"](
+        target_condition="diabetes",
+        needed_features=[],
+        rationale="x",
+    )
 
     traj = deps["enforcer"].trajectory
     assert traj.count("consult_medical_expert") == 2
-    assert traj[-1] == "request_more_info"
+    assert traj[-1] == "request_ml_clinical_info"

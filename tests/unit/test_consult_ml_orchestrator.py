@@ -191,8 +191,15 @@ class TestMakeConsultMlOrchestrator:
         assert "{" not in prompt_sent
 
     @pytest.mark.asyncio
-    async def test_returns_string_result(self):
-        """The tool must return a str extracted from the sub-agent result."""
+    async def test_returns_ml_orchestrator_response(self):
+        """Tool now returns MLOrchestratorResponse (Pydantic, not str).
+
+        The legacy fallback path (when ml_orchestrator instance is not
+        provided, only `llm`) wraps the agent's text into the same
+        response shape with `needed_features=None`.
+        """
+        from packages.schemas.ml import MLOrchestratorResponse
+
         enforcer = ProtocolEnforcer()
         fn = make_consult_ml_orchestrator(llm=_FakeLLM(), enforcer=enforcer)
 
@@ -207,12 +214,17 @@ class TestMakeConsultMlOrchestrator:
         ):
             result = await fn(request="run prediction", patient_features={"age": 50})
 
-        assert isinstance(result, str)
-        assert "Diabetes risk: 0.72" in result
+        assert isinstance(result, MLOrchestratorResponse)
+        assert "Diabetes risk: 0.72" in result.reasoning
+        # Legacy fallback path never populates needed_features (no Phase 2).
+        assert result.needed_features is None
 
     @pytest.mark.asyncio
     async def test_uses_structured_response_when_available(self):
-        """Prefer output_structured.response over answer.text."""
+        """Prefer output_structured.response over answer.text in the
+        wrapped MLOrchestratorResponse.reasoning."""
+        from packages.schemas.ml import MLOrchestratorResponse
+
         enforcer = ProtocolEnforcer()
         fn = make_consult_ml_orchestrator(llm=_FakeLLM(), enforcer=enforcer)
 
@@ -233,7 +245,8 @@ class TestMakeConsultMlOrchestrator:
         ):
             result = await fn(request="predict")
 
-        assert result == "structured ML text"
+        assert isinstance(result, MLOrchestratorResponse)
+        assert result.reasoning == "structured ML text"
 
     @pytest.mark.asyncio
     async def test_enforcer_not_yet_has_tool_before_call(self):
