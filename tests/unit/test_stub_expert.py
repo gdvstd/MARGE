@@ -51,11 +51,6 @@ class TestStubMedicalExpert:
         response = expert.consult(question="?", findings={})
         assert response.citations[0].document.source_url
 
-    def test_not_abstained_by_default(self):
-        expert = StubMedicalExpert()
-        response = expert.consult(question="?", findings={})
-        assert response.abstained is False
-
     def test_response_independent_of_input(self):
         expert = StubMedicalExpert()
         a = expert.consult(question="q1", findings={"x": 1})

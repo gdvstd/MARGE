@@ -59,15 +59,19 @@ class ResearchReport(BaseModel):
 
 
 class MedicalExpertResponse(BaseModel):
-    """The medical expert's response shape. Enforced by `enforce_citation` middleware.
+    """The Medical Expert's response shape.
 
-    The middleware rejects responses where `reasoning` makes clinical claims
-    but `citations` is empty. `abstained=True` is the explicit escape hatch
-    for cases the expert cannot answer; in that case `citations` may be empty
-    and `abstain_reason` should explain why.
+    The Expert always answers — there is no `abstained` field. When the
+    question is uncertain or under-specified, the Expert hedges in
+    `reasoning` ("differential includes A and B; needs lab X to narrow")
+    rather than declining. The decision to abstain from the user's
+    overall request is the Chat Agent's responsibility, not the Expert's.
+
+    `citations` is auto-populated by the agent harness from the Expert's
+    `search_medical_web` tool calls. If the Expert did not call the
+    search tool, `citations` is empty and `reasoning` should hedge
+    accordingly rather than make claims that require a primary source.
     """
 
     reasoning: str
     citations: list[Citation]
-    abstained: bool = False
-    abstain_reason: str | None = None

@@ -1,14 +1,27 @@
-"""Local tool: abstain — terminal for "we cannot reliably advise".
+"""Local tool: abstain — terminal for "this query is outside our ML scope".
 
-Use when:
-- ML predictions conflict irresolvably and the medical expert cannot reconcile.
-- The medical expert flags the user's symptoms as outside the scope of any
-  available predict_* tool ("scope mismatch" path).
-- Data quality is too poor for a reliable analytical conclusion.
+Use ONLY for scope mismatch: the user's concern does not map to any
+predictor in the ML catalog, even after the Medical Expert has confirmed
+the clinical question is reasonable. Examples: a user asks about a
+dermatologic rash, a musculoskeletal symptom, or a pediatric condition,
+and the catalog only carries cardiometabolic / oncology / infectious
+predictors.
+
+Do NOT use abstain for:
+- "I'm not confident in my prediction" — that is `request_ml_clinical_info`
+  driven by the ML Orchestrator's needed_features (or by hedging in chat).
+- "Expert hedged and ML confidence was mediocre" — synthesize and report,
+  or ask for more data.
+- "I don't have enough info to answer this clarifying question" — just
+  reply in natural language.
+
+Abstain is the system saying "this question is outside what MARGE is built
+to analyze" — not "I'm uncertain". The UI renders it as an explicit
+scope-mismatch warning with a referral.
 
 Gating: requires at least one consult_medical_expert in the trajectory
-(enforced by MARGEProtocolRequirement). The orchestrator must have at
-least *tried* to consult the expert before declining.
+(enforced by MARGEProtocolRequirement) so the system has *attempted* a
+clinical assessment before declaring scope mismatch.
 """
 
 from collections.abc import Callable
@@ -21,10 +34,11 @@ from apps.orchestrator.middleware.enforce_protocol import ProtocolEnforcer
 
 TOOL_NAME = "abstain"
 TOOL_DESCRIPTION = (
-    "Terminal: decline to provide a clinical recommendation, with a structured "
-    "rationale and a fallback action for the user. Use when ML predictions "
-    "conflict irresolvably, when the expert flags data as unreliable, or when "
-    "the user's concern is outside the scope of available ML predictors. "
+    "Terminal: declare that the user's query is outside the scope of MARGE's "
+    "ML catalog (no available predictor maps to the clinical concern, even "
+    "after the medical expert confirms the question is reasonable). Do NOT "
+    "use this for low confidence, mixed signals, or missing data — those are "
+    "handled by `request_ml_clinical_info` or by natural-language replies. "
     "Requires at least one consult_medical_expert in the trajectory."
 )
 
@@ -32,11 +46,10 @@ TOOL_DESCRIPTION = (
 class ToolInput(StrictToolInput):
     reason: str = Field(
         description=(
-            "Concrete reason this turn cannot give a reliable recommendation "
-            "(e.g., 'Expert review indicates the symptoms do not map to any "
-            "available ML predictor', or 'Diabetes and breast-screening models "
-            "both returned low-confidence outputs that the expert could not "
-            "reconcile')."
+            "Concrete scope-mismatch reason. The user's clinical concern does "
+            "not map to any registered ML predictor. Example: 'User describes "
+            "a dermatologic rash; the ML catalog covers cardiometabolic and "
+            "oncologic predictors only and contains no skin model.'"
         )
     )
     fallback_recommendation: str = Field(
